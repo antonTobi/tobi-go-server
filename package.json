@@ -1,0 +1,20 @@
+{
+  "name": "tobi-go-server",
+  "version": "1.0.0",
+  "description": "Simple webapp boilerplate using p5.js and Firebase",
+  "main": "index.html",
+  "scripts": {
+    "start": "npx http-server -p 8080 -o",
+    "test": "echo \"No tests specified\" && exit 0"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "firebase": "^12.6.0",
+    "p5": "^2.1.1"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  }
+}

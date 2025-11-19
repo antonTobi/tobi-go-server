@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>p5.js + Firebase Webapp</title>
+    <link rel="stylesheet" href="style.css">
+    
+    <!-- p5.js library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
+    
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>p5.js + Firebase Webapp</h1>
+        <div id="canvas-container"></div>
+        <div id="info">
+            <p>Click on the canvas to draw circles!</p>
+            <button id="clearBtn">Clear Canvas</button>
+        </div>
+    </div>
+    
+    <!-- Firebase configuration -->
+    <script src="firebase-config.js"></script>
+    
+    <!-- p5.js sketch -->
+    <script src="sketch.js"></script>
+</body>
+</html>
