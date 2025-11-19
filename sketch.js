@@ -50,14 +50,14 @@ function clearCanvas() {
 function saveToFirebase(circle) {
     // Check if Firebase is initialized
     if (typeof db !== 'undefined' && db !== null) {
-        db.collection('circles').add({
+        db.ref('circles').push({
             x: circle.x,
             y: circle.y,
             size: circle.size,
-            timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            timestamp: firebase.database.ServerValue.TIMESTAMP
         })
-        .then((docRef) => {
-            console.log('Circle saved with ID: ', docRef.id);
+        .then((ref) => {
+            console.log('Circle saved with ID: ', ref.key);
         })
         .catch((error) => {
             console.error('Error saving circle: ', error);

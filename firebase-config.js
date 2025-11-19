@@ -3,20 +3,22 @@
 // Get this from: Firebase Console > Project Settings > General > Your apps > Web app
 
 const firebaseConfig = {
-    apiKey: "YOUR_API_KEY",
-    authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-    projectId: "YOUR_PROJECT_ID",
-    storageBucket: "YOUR_PROJECT_ID.appspot.com",
-    messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-    appId: "YOUR_APP_ID"
+    apiKey: "AIzaSyDsy-Z4R8aZznpfHiHMugWRwfWs3OqBHlQ",
+    authDomain: "go-server-a4265.firebaseapp.com",
+    databaseURL: "https://go-server-a4265-default-rtdb.europe-west1.firebasedatabase.app",
+    projectId: "go-server-a4265",
+    storageBucket: "go-server-a4265.firebasestorage.app",
+    messagingSenderId: "955971546364",
+    appId: "1:955971546364:web:13e777f68d3407bcd87b79"
 };
+
 
 // Initialize Firebase
 let db = null;
 
 try {
     firebase.initializeApp(firebaseConfig);
-    db = firebase.firestore();
+    db = firebase.database();
     console.log('Firebase initialized successfully!');
 } catch (error) {
     console.warn('Firebase initialization failed:', error);
