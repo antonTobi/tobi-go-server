@@ -1,13 +1,6 @@
 # tobi-go-server
 
-## Getting Started
-
-### Prerequisites
-
-- Node.js (v14 or higher)
-- npm (comes with Node.js)
-
-### Installation
+### Running locally
 
 1. Clone the repository:
 ```bash
@@ -20,20 +13,7 @@ cd tobi-go-server
 npm install
 ```
 
-### Running the App
-
-Start the development server:
+3. Start the development server:
 ```bash
 npm run dev
 ```
-
-This runs `netlify dev` which provides local testing with the same routing as production.
-
-### Deployment
-
-Deploy to Netlify:
-```bash
-npm run deploy
-```
-
-Or use Netlify's Git integration by connecting your repository at [netlify.com](https://app.netlify.com).

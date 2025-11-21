@@ -14,6 +14,13 @@ body {
     padding: 20px;
 }
 
+/* Full-screen game body */
+body.game-body {
+    padding: 0;
+    margin: 0;
+    overflow: hidden;
+}
+
 .container {
     background: white;
     border-radius: 15px;
@@ -123,12 +130,62 @@ h2 {
     font-style: italic;
 }
 
-/* Game page styles */
-.game-header {
+/* Game setup page styles */
+.setup-container {
     display: flex;
-    justify-content: space-between;
+    width: 100%;
+    max-width: 1400px;
+    gap: 30px;
+    background: white;
+    border-radius: 15px;
+    padding: 30px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+}
+
+.setup-sidebar {
+    flex: 0 0 350px;
+    display: flex;
+    flex-direction: column;
+}
+
+.setup-preview {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
     align-items: center;
+}
+
+#preview-container {
+    width: 100%;
+    max-width: 600px;
+    aspect-ratio: 1;
+}
+
+.form-group {
     margin-bottom: 20px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    color: #333;
+    font-weight: bold;
+}
+
+.form-group input,
+.form-group select {
+    width: 100%;
+    padding: 10px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    font-size: 16px;
+    transition: border-color 0.3s ease;
+}
+
+.form-group input:focus,
+.form-group select:focus {
+    outline: none;
+    border-color: #667eea;
 }
 
 .back-link {
@@ -136,30 +193,15 @@ h2 {
     text-decoration: none;
     font-size: 1em;
     transition: color 0.3s ease;
+    margin-bottom: 20px;
+    display: inline-block;
 }
 
 .back-link:hover {
     color: #764ba2;
 }
 
-#canvas-container {
-    margin: 20px auto;
-    border: 2px solid #667eea;
-    border-radius: 10px;
-    overflow: hidden;
-    display: inline-block;
-}
-
-#game-info {
-    margin-top: 20px;
-}
-
-#game-info p {
-    color: #666;
-    margin: 10px 0;
-}
-
-#move-count {
-    font-weight: bold;
-    color: #667eea;
+/* Game page - minimal full-screen */
+.game-body canvas {
+    display: block;
 }

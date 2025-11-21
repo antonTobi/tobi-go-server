@@ -13,22 +13,16 @@
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+    
+    <!-- Vector utilities -->
+    <script src="/vector.js"></script>
+    
+    <!-- Board class -->
+    <script src="/board.js"></script>
 </head>
-<body>
-    <div class="container">
-        <div class="game-header">
-            <a href="/" class="back-link">← Back to Home</a>
-            <h1>Game <span id="game-id"></span></h1>
-        </div>
-        <div id="auth-status">Authenticating...</div>
-        <div id="game-content" style="display: none;">
-            <div id="canvas-container"></div>
-            <div id="game-info">
-                <p>Click on the canvas to add a move!</p>
-                <p>Total moves: <span id="move-count">0</span></p>
-            </div>
-        </div>
-    </div>
+<body class="game-body">
+    <!-- Hidden game ID for reference -->
+    <div id="game-id" style="display: none;"></div>
     
     <!-- Firebase configuration -->
     <script src="/firebase-config.js"></script>

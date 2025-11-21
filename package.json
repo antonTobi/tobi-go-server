@@ -5,7 +5,6 @@
   "main": "index.html",
   "scripts": {
     "dev": "netlify dev",
-    "deploy": "netlify deploy --prod",
     "test": "echo \"No tests specified\" && exit 0"
   },
   "keywords": [],

@@ -27,22 +27,8 @@ function createGame() {
         return;
     }
     
-    const newGameRef = db.ref('games').push();
-    const gameData = {
-        createdBy: currentUser.uid,
-        createdAt: firebase.database.ServerValue.TIMESTAMP,
-        moves: {}
-    };
-    
-    newGameRef.set(gameData)
-        .then(() => {
-            console.log('Game created:', newGameRef.key);
-            window.location.href = `/game/${newGameRef.key}`;
-        })
-        .catch((error) => {
-            console.error('Error creating game:', error);
-            alert('Failed to create game');
-        });
+    // Navigate to game setup page
+    window.location.href = '/game-setup';
 }
 
 function displayGames(games) {

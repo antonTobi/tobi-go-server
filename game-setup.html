@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Go Server - New Game</title>
+    <link rel="stylesheet" href="/style.css">
+    
+    <!-- p5.js library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
+    
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+</head>
+<body>
+    <div class="setup-container">
+        <div class="setup-sidebar">
+            <a href="/" class="back-link">← Back to Home</a>
+            <h1>New Game</h1>
+            
+            <form id="game-setup-form">
+                <div class="form-group">
+                    <label for="board-type">Board Type</label>
+                    <select id="board-type" name="boardType">
+                        <option value="grid">Grid</option>
+                        <option value="star">Star</option>
+                        <option value="dodecagon">Dodecagon</option>
+                        <option value="rotatedGrid">Rotated Grid</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="board-size">Board Size</label>
+                    <input type="number" id="board-size" name="boardSize" value="9" min="2" max="25">
+                </div>
+                
+                <!-- <div class="form-group">
+                    <label for="time-control">Time Control (minutes)</label>
+                    <input type="number" id="time-control" name="timeControl" value="30" min="1" max="180">
+                </div> -->
+                
+                <button type="submit" class="btn-primary">Create Game</button>
+            </form>
+        </div>
+        
+        <div class="setup-preview">
+            <h2>Starting position</h2>
+            <div id="preview-container"></div>
+        </div>
+    </div>
+    
+    <!-- Firebase configuration -->
+    <script src="/firebase-config.js"></script>
+    
+    <!-- Vector utilities -->
+    <script src="/vector.js"></script>
+    
+    <!-- Board class -->
+    <script src="/board.js"></script>
+    
+    <!-- Setup script -->
+    <script src="/game-setup.js"></script>
+</body>
+</html>

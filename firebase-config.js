@@ -45,5 +45,4 @@ try {
     });
 } catch (error) {
     console.warn('Firebase initialization failed:', error);
-    console.warn('The app will work without Firebase features.');
 }
