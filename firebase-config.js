@@ -15,11 +15,34 @@ const firebaseConfig = {
 
 // Initialize Firebase
 let db = null;
+let auth = null;
+let currentUser = null;
 
 try {
     firebase.initializeApp(firebaseConfig);
     db = firebase.database();
+    auth = firebase.auth();
     console.log('Firebase initialized successfully!');
+    
+    // Enable anonymous authentication
+    auth.signInAnonymously()
+        .then(() => {
+            console.log('Signed in anonymously');
+        })
+        .catch((error) => {
+            console.error('Anonymous sign-in failed:', error);
+        });
+    
+    // Listen for auth state changes
+    auth.onAuthStateChanged((user) => {
+        if (user) {
+            currentUser = user;
+            console.log('User authenticated:', user.uid);
+        } else {
+            currentUser = null;
+            console.log('User signed out');
+        }
+    });
 } catch (error) {
     console.warn('Firebase initialization failed:', error);
     console.warn('The app will work without Firebase features.');

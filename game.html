@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Go Server - Home</title>
-    <link rel="stylesheet" href="style.css">
+    <title>Go Server - Game</title>
+    <link rel="stylesheet" href="/style.css">
     
     <!-- p5.js library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
@@ -16,19 +16,24 @@
 </head>
 <body>
     <div class="container">
-        <h1>Go Server</h1>
+        <div class="game-header">
+            <a href="/" class="back-link">← Back to Home</a>
+            <h1>Game <span id="game-id"></span></h1>
+        </div>
         <div id="auth-status">Authenticating...</div>
-        <div id="home-content" style="display: none;">
-            <button id="createGameBtn" class="btn-primary">Create New Game</button>
-            <h2>Active Games</h2>
-            <div id="games-list"></div>
+        <div id="game-content" style="display: none;">
+            <div id="canvas-container"></div>
+            <div id="game-info">
+                <p>Click on the canvas to add a move!</p>
+                <p>Total moves: <span id="move-count">0</span></p>
+            </div>
         </div>
     </div>
     
     <!-- Firebase configuration -->
     <script src="/firebase-config.js"></script>
     
-    <!-- Home page script -->
-    <script src="/index.js"></script>
+    <!-- Game script -->
+    <script src="/game.js"></script>
 </body>
 </html>
