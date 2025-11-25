@@ -17,29 +17,40 @@ const firebaseConfig = {
 let db = null;
 let auth = null;
 let currentUser = null;
+let authReady = false;
 
 try {
     firebase.initializeApp(firebaseConfig);
     db = firebase.database();
     auth = firebase.auth();
-    console.log('Firebase initialized successfully!');
     
-    // Enable anonymous authentication
-    auth.signInAnonymously()
+    // Set persistence to LOCAL (survives browser restarts)
+    auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
         .then(() => {
-            console.log('Signed in anonymously');
+            console.log('Firebase initialized with persistent auth');
+            
+            // Only sign in anonymously if not already signed in
+            return auth.currentUser ? Promise.resolve() : auth.signInAnonymously();
+        })
+        .then(() => {
+            console.log('Auth ready');
         })
         .catch((error) => {
-            console.error('Anonymous sign-in failed:', error);
+            console.error('Auth initialization failed:', error);
         });
     
     // Listen for auth state changes
     auth.onAuthStateChanged((user) => {
         if (user) {
             currentUser = user;
+            authReady = true;
             console.log('User authenticated:', user.uid);
+            
+            // Dispatch custom event for pages to listen to
+            window.dispatchEvent(new CustomEvent('authReady', { detail: { user } }));
         } else {
             currentUser = null;
+            authReady = false;
             console.log('User signed out');
         }
     });

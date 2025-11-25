@@ -17,8 +17,8 @@
 <body>
     <div class="container">
         <h1>Go Server</h1>
-        <div id="auth-status">Authenticating...</div>
-        <div id="home-content" style="display: none;">
+        <div id="auth-status" class="auth-status-subtle">Connecting...</div>
+        <div id="home-content">
             <button id="createGameBtn" class="btn-primary">Create New Game</button>
             <h2>Active Games</h2>
             <div id="games-list"></div>
@@ -27,6 +27,12 @@
     
     <!-- Firebase configuration -->
     <script src="/firebase-config.js"></script>
+    
+    <!-- Vector utilities -->
+    <script src="/vector.js"></script>
+    
+    <!-- Board class -->
+    <script src="/board.js"></script>
     
     <!-- Home page script -->
     <script src="/index.js"></script>

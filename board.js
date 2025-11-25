@@ -1,21 +1,51 @@
+// Define colors for stones (1-5: black, white, red, blue, yellow)
+const stoneColors = [
+    null,
+    [50, 50, 50],        // 1: Black
+    [255, 255, 255],     // 2: White
+    [220, 50, 50],       // 3: Red
+    [50, 100, 220],      // 4: Blue
+    [220, 200, 50]       // 5: Yellow
+];
+
+const strokeColors = [
+    null,
+    [25, 25, 25],        // 1: Black stroke
+    [200, 200, 200],     // 2: White stroke
+    [150, 30, 30],       // 3: Red stroke
+    [30, 60, 150],       // 4: Blue stroke
+    [150, 140, 30]       // 5: Yellow stroke
+];
+
+class Node {
+    constructor(x, y) {
+        this.x = x
+        this.y = y
+        this.color = 0
+        this.hoshi = false
+        this.neighbors = []
+    }
+}
+
 // Board class for Go game
 class Board {
     // Factory methods for different board types
     static grid(w, h = w) {
-        let coordinates = [];
+        let nodes = [];
         for (let x = 0; x < w; x++) {
             for (let y = 0; y < h; y++) {
-                coordinates.push([x, y]);
+                nodes.push(new Node(x, y))
             }
         }
 
         // Add starpoints for 19x19 board
-        let starpoints = [];
         if (w === 19 && h === 19) {
-            starpoints = [60, 66, 72, 180, 186, 192, 300, 306, 312];
+            for (let i of [60, 66, 72, 174, 180, 186, 174, 288, 294, 300]) {
+                nodes[i].hoshi = true
+            }
         }
 
-        return new Board(coordinates, starpoints);
+        return new Board(nodes);
     }
 
     static star(n) {
@@ -29,7 +59,8 @@ class Board {
                 }
             }
         }
-        return new Board(coordinates);
+        let nodes = coordinates.map(c => new Node(...c))
+        return new Board(nodes);
     }
 
     static dodecagon(k) {
@@ -66,7 +97,8 @@ class Board {
                 coordinates.push(p.plus([1 + Math.sqrt(3) / 2, 1 / 2]).rotate(t));
             }
         }
-        return new Board(coordinates);
+        let nodes = coordinates.map(c => new Node(...c))
+        return new Board(nodes);
     }
 
     static rotatedGrid(w, h = w) {
@@ -87,32 +119,28 @@ class Board {
             }
         }
 
-        return new Board(coordinates);
+        let nodes = coordinates.map(c => new Node(...c))
+        return new Board(nodes);
     }
 
-    constructor(coordinates, starpoints = []) {
+    constructor(nodes) {
         this.turn = 0;
-        this.nodes = [];
+        this.nodes = nodes;
+
+        nodes.forEach((node, index) => {
+            node.i = index
+        })
 
         // Calculate bounding box and initialize nodes
         let minX = Infinity, minY = Infinity;
         let maxX = -Infinity, maxY = -Infinity;
 
-        coordinates.forEach(([x, y], i) => {
+        for (let {x, y} of nodes) {
             minX = Math.min(minX, x - 1);
             minY = Math.min(minY, y - 1);
             maxX = Math.max(maxX, x + 1);
             maxY = Math.max(maxY, y + 1);
-
-            this.nodes.push({
-                i,
-                x,
-                y,
-                color: 0, // 0 = empty, 1 = black, 2 = white
-                neighbors: [],
-                isStarpoint: starpoints.includes(i)
-            });
-        });
+        }
 
         this.boundingBox = { minX, minY, maxX, maxY };
         this.width = maxX - minX;
@@ -137,6 +165,8 @@ class Board {
         this.scale = 100;
         this.offsetX = 0;
         this.offsetY = 0;
+        this.sw = 2; // strokeWeight for stones
+        this.sp = 5; // diameter for starpoints
     }
 
     get nextColor() {
@@ -152,6 +182,8 @@ class Board {
             Math.round((canvasWidth - this.scale * this.width) / 2);
         this.offsetY = -this.boundingBox.minY * this.scale +
             Math.round((canvasHeight - this.scale * this.height) / 2);
+        this.sw = 0.05 * this.scale;
+        this.sp = Math.max(0.2 * this.scale, 3);
     }
 
     boardToCanvas(x, y) {
@@ -245,17 +277,17 @@ class Board {
         return Array.from(visited); // No liberties found, return dead chain
     }
 
-    draw() {
+    draw(p = window) {
         const align = (val) => Math.round(val + 0.5) - 0.5;
 
-        push();
-        translate(this.offsetX, this.offsetY);
+        p.push();
+        p.translate(this.offsetX, this.offsetY);
 
         // Draw edges
-        stroke(60, 40, 0);
-        strokeWeight(1);
+        p.stroke(60, 40, 0);
+        p.strokeWeight(1);
         for (let [a, b] of this.edges) {
-            line(
+            p.line(
                 align(this.scale * a.x),
                 align(this.scale * a.y),
                 align(this.scale * b.x),
@@ -264,49 +296,41 @@ class Board {
         }
 
         // Draw starpoints
-        noStroke();
-        fill(60, 40, 0);
+        p.noStroke();
+        p.fill(60, 40, 0);
         for (let node of this.nodes) {
-            if (node.isStarpoint) {
-                circle(align(node.x * this.scale), align(node.y * this.scale), 5);
+            if (node.hoshi) {
+                p.circle(align(node.x * this.scale), align(node.y * this.scale), this.sp);
             }
         }
 
         // Draw stones
-        strokeWeight(2);
+        p.strokeWeight(this.sw);
         for (let node of this.nodes) {
-            if (node.color === 1) {
-                // Black stone
-                fill(50);
-                stroke(25);
-                circle(node.x * this.scale, node.y * this.scale, this.scale - 2);
-            } else if (node.color === 2) {
-                // White stone
-                fill(255);
-                stroke(200);
-                circle(node.x * this.scale, node.y * this.scale, this.scale - 2);
+            if (node.color >= 1 && node.color <= 5) {
+                p.fill(...stoneColors[node.color]);
+                p.stroke(...strokeColors[node.color]);
+                p.circle(node.x * this.scale, node.y * this.scale, this.scale - this.sw);
             }
         }
 
-        pop();
+        p.pop();
     }
 
-    drawGhostStone(node, color) {
+    drawGhostStone(node, color, p = window) {
         if (!node) return;
 
-        push();
-        translate(this.offsetX, this.offsetY);
-        strokeWeight(2);
+        p.push();
+        p.translate(this.offsetX, this.offsetY);
+        p.strokeWeight(this.sw);
 
-        if (color === 1) {
-            fill(50, 127);
-            stroke(25);
-        } else {
-            fill(255, 127);
-            stroke(200);
+
+        if (color >= 1 && color <= 5) {
+            p.fill(...stoneColors[color], 127);
+            p.stroke(...strokeColors[color]);
+            p.circle(node.x * this.scale, node.y * this.scale, this.scale - this.sw);
         }
 
-        circle(node.x * this.scale, node.y * this.scale, this.scale - 2);
-        pop();
+        p.pop();
     }
 }

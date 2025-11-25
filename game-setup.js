@@ -2,6 +2,8 @@
 let previewBoard = null;
 let boardType = 'grid';
 let boardSize = 19;
+let selectedColor = 1; // Default to black
+let hoverNode = null;
 
 initSetupPage();
 
@@ -10,6 +12,18 @@ function initSetupPage() {
     document.getElementById('board-type').addEventListener('change', updatePreview);
     document.getElementById('board-size').addEventListener('input', updatePreview);
     document.getElementById('game-setup-form').addEventListener('submit', handleCreateGame);
+    
+    // Setup stone color toolbar
+    document.querySelectorAll('.stone-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.stone-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            selectedColor = parseInt(btn.dataset.color);
+        });
+    });
+    
+    // Set default active button
+    document.querySelector('.stone-btn[data-color="1"]').classList.add('active');
     
     // Initial preview
     updatePreview();
@@ -35,7 +49,7 @@ function updatePreview() {
             break;
     }
     
-    redraw();
+    // redraw();
 }
 
 function handleCreateGame(event) {
@@ -46,22 +60,27 @@ function handleCreateGame(event) {
         return;
     }
     
-    const timeControl = parseInt(document.getElementById('time-control').value);
+    // Collect initial stones
+    const initialStones = [];
+    if (previewBoard) {
+        previewBoard.nodes.forEach(node => {
+            if (node.color) {
+                initialStones.push({
+                    nodeIndex: node.i,
+                    color: node.color
+                });
+            }
+        });
+    }
     
     attemptCreateGame({
         boardType,
-        boardSize
+        boardSize,
+        initialStones
     });
 }
 
-function attemptCreateGame(settings, retries = 0) {
-    const maxRetries = 5;
-    
-    if (retries >= maxRetries) {
-        alert('Failed to create game after multiple attempts. Please try again.');
-        return;
-    }
-    
+function attemptCreateGame(settings) {    
     const gameId = generateGameId();
     const newGameRef = db.ref(`games/${gameId}`);
     
@@ -69,7 +88,7 @@ function attemptCreateGame(settings, retries = 0) {
         .then((snapshot) => {
             if (snapshot.exists()) {
                 console.log(`Game ID ${gameId} already exists, retrying...`);
-                attemptCreateGame(settings, retries + 1);
+                attemptCreateGame(settings);
             } else {
                 const gameData = {
                     createdBy: currentUser.uid,
@@ -113,6 +132,34 @@ function draw() {
     if (previewBoard) {
         previewBoard.calculateTransform(width, height);
         previewBoard.draw();
+        
+        // Draw ghost stone on hover
+        if (hoverNode) {
+            previewBoard.drawGhostStone(hoverNode, selectedColor);
+        }
+    }
+}
+
+function mouseMoved() {
+    if (previewBoard) {
+        let newHover = previewBoard.findHover(mouseX, mouseY)
+        
+        if (hoverNode !== newHover) {
+            hoverNode = newHover;
+            redraw();
+        }
+    }
+}
+
+function mousePressed() {
+    if (previewBoard && hoverNode) {
+        // Toggle stone: if same color, remove; otherwise set to selected color
+        if (hoverNode.color === selectedColor) {
+            hoverNode.color = 0;
+        } else {
+            hoverNode.color = selectedColor;
+        }
+        redraw();
     }
 }
 

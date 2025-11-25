@@ -1,13 +1,29 @@
 // Home page script
 let gamesRef = null;
 
-// Wait for auth to be ready
-auth.onAuthStateChanged((user) => {
+// Initialize page immediately
+initHomePage();
+
+// Update auth status when ready
+function updateAuthStatus(user) {
+    const authStatus = document.getElementById('auth-status');
     if (user) {
-        document.getElementById('auth-status').textContent = `Signed in as: ${user.uid.substring(0, 8)}...`;
-        document.getElementById('home-content').style.display = 'block';
-        initHomePage();
+        authStatus.textContent = `Signed in`;
+        authStatus.classList.add('auth-ready');
+    } else {
+        authStatus.textContent = 'Connecting...';
+        authStatus.classList.remove('auth-ready');
     }
+}
+
+// Listen for auth ready event (faster than onAuthStateChanged)
+window.addEventListener('authReady', (e) => {
+    updateAuthStatus(e.detail.user);
+});
+
+// Also listen to onAuthStateChanged as fallback
+auth.onAuthStateChanged((user) => {
+    updateAuthStatus(user);
 });
 
 function initHomePage() {
@@ -42,25 +58,92 @@ function displayGames(games) {
     
     Object.keys(games).forEach((gameId) => {
         const game = games[gameId];
-        const gameElement = document.createElement('div');
-        gameElement.className = 'game-item';
         
-        const moveCount = game.moves ? Object.keys(game.moves).length : 0;
-        const date = game.createdAt ? new Date(game.createdAt).toLocaleString() : 'Unknown';
+        // Create thumbnail container
+        const thumbContainer = document.createElement('div');
+        thumbContainer.className = 'game-thumbnail';
+        thumbContainer.onclick = () => joinGame(gameId);
         
-        gameElement.innerHTML = `
-            <div class="game-info">
-                <strong>Game ${gameId.substring(0, 8)}</strong>
-                <span>Moves: ${moveCount}</span>
-                <span>Created: ${date}</span>
-            </div>
-            <button class="btn-join" onclick="joinGame('${gameId}')">Join</button>
-        `;
+        // Create canvas container for p5 instance
+        const canvasContainer = document.createElement('div');
+        canvasContainer.className = 'thumbnail-canvas';
+        thumbContainer.appendChild(canvasContainer);
         
-        gamesList.appendChild(gameElement);
+        gamesList.appendChild(thumbContainer);
+        
+        // Create p5 instance for this thumbnail
+        createThumbnail(canvasContainer, game);
     });
 }
 
+function createThumbnail(container, game) {
+    const sketch = (p) => {
+        let board = null;
+        
+        p.setup = () => {
+            p.createCanvas(200, 200);
+            p.noLoop();
+            
+            // Initialize board from game settings
+            if (game.settings) {
+                const { boardType, boardSize, initialStones } = game.settings;
+                
+                switch(boardType) {
+                    case 'grid':
+                        board = Board.grid(boardSize);
+                        break;
+                    case 'star':
+                        board = Board.star(boardSize);
+                        break;
+                    case 'dodecagon':
+                        board = Board.dodecagon(boardSize);
+                        break;
+                    case 'rotatedGrid':
+                        board = Board.rotatedGrid(boardSize);
+                        break;
+                    default:
+                        board = Board.grid(19);
+                }
+                
+                // Apply initial stones
+                if (initialStones && initialStones.length > 0) {
+                    initialStones.forEach(stone => {
+                        const node = board.nodes[stone.nodeIndex];
+                        if (node) {
+                            node.color = stone.color;
+                        }
+                    });
+                }
+                
+                // Apply moves using placeStone to handle captures
+                if (game.moves) {
+                    Object.values(game.moves).forEach(move => {
+                        if (move.nodeIndex != null && move.color) {
+                            board.placeStone(move.nodeIndex, move.color);
+                        }
+                    });
+                }
+                
+                board.calculateTransform(p.width, p.height);
+            }
+        };
+        
+        p.draw = () => {
+            p.background(255, 193, 140);
+            
+            if (board) {
+                board.draw(p);
+            }
+        };
+    };
+    
+    new p5(sketch, container);
+}
+
 function joinGame(gameId) {
-    window.location.href = `/game/${gameId}`;
+    if (window.location.href == "http://127.0.0.1:3000/") {
+        window.location.href = `/game.html?id=${gameId}`
+    } else {
+        window.location.href = `/game/${gameId}`;
+    }
 }

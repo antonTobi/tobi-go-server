@@ -6,9 +6,13 @@ let board = null;
 let hoverNode = null;
 let gameSettings = null;
 
-// Get game ID from URL path (e.g., /game/abc123)
+// Get game ID from URL path (e.g., /game/abc123) or query parameter (e.g., /game.html?id=abc123)
 const pathParts = window.location.pathname.split('/');
-gameId = pathParts[pathParts.length - 1];
+const pathGameId = pathParts[pathParts.length - 1];
+const urlParams = new URLSearchParams(window.location.search);
+const queryGameId = urlParams.get('id');
+
+gameId = queryGameId || pathGameId;
 
 if (!gameId || gameId === 'game.html') {
     alert('No game ID provided');
@@ -18,12 +22,9 @@ if (!gameId || gameId === 'game.html') {
 // Display game ID
 document.getElementById('game-id').textContent = gameId.substring(0, 8);
 
-// Wait for auth to be ready
-auth.onAuthStateChanged((user) => {
-    if (user) {
-        initGame();
-    }
-});
+// Initialize game immediately (don't wait for auth)
+// Auth is only needed for making moves
+initGame();
 
 function initGame() {
     gameRef = db.ref(`games/${gameId}`);
@@ -52,23 +53,33 @@ function initGame() {
 }
 
 function initializeBoard() {
-    const { boardType, boardSize } = gameSettings;
+    const { boardType, boardSize, initialStones } = gameSettings;
     
     switch(boardType) {
         case 'grid':
             board = Board.grid(boardSize);
             break;
         case 'star':
-            board = Board.star(Math.max(2, Math.floor(boardSize / 5)));
+            board = Board.star(boardSize);
             break;
         case 'dodecagon':
-            board = Board.dodecagon(Math.max(2, Math.floor(boardSize / 3)));
+            board = Board.dodecagon(boardSize);
             break;
         case 'rotatedGrid':
             board = Board.rotatedGrid(boardSize);
             break;
         default:
             board = Board.grid(19);
+    }
+    
+    // Apply initial stones if any
+    if (initialStones && initialStones.length > 0) {
+        initialStones.forEach(stone => {
+            const node = board.nodes[stone.nodeIndex];
+            if (node) {
+                node.color = stone.color;
+            }
+        });
     }
     
     board.calculateTransform(width, height);
@@ -113,7 +124,7 @@ function mouseMoved() {
 
 function mousePressed() {
     if (board && hoverNode) {
-        addMove(hoverNode.i, board.nextColor);
+        addMove(hoverNode.i, board.nextColor); // TODO: add back index prop
         hoverNode = null;
         redraw();
     }

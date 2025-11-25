@@ -1,7 +1,7 @@
 {
   "name": "tobi-go-server",
   "version": "1.0.0",
-  "description": "Simple webapp boilerplate using p5.js and Firebase",
+  "description": "Variant go server using p5.js and Firebase",
   "main": "index.html",
   "scripts": {
     "dev": "netlify dev",
