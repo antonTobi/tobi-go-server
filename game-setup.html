@@ -28,12 +28,30 @@
                         <option value="star">Star</option>
                         <option value="dodecagon">Dodecagon</option>
                         <option value="rotatedGrid">Rotated Grid</option>
+                        <option value="hexagon">Hexagon</option>
                     </select>
                 </div>
                 
                 <div class="form-group">
                     <label for="board-size">Board Size</label>
-                    <input type="number" id="board-size" name="boardSize" value="9" min="2" max="25">
+                    <div class="input-with-spinner">
+                        <button type="button" id="size-decrement" class="spinner-btn">−</button>
+                        <input type="text" id="board-size" name="boardSize" value="9" placeholder="e.g. 19 or 19x13">
+                        <button type="button" id="size-increment" class="spinner-btn">+</button>
+                    </div>
+                    <span id="board-size-error" class="error-message"></span>
+                </div>
+
+                <div class="form-group">
+                    <label for="pregame-sequence">Pregame Sequence</label>
+                    <input type="text" id="pregame-sequence" name="pregameSequence" value="" placeholder="e.g. R01,R01,R01 for 3 random stones">
+                    <span id="pregame-sequence-error" class="error-message"></span>
+                </div>
+
+                <div class="form-group">
+                    <label for="turn-cycle">Turn Cycle</label>
+                    <input type="text" id="turn-cycle" name="turnCycle" value="101,202" placeholder="e.g. 101,202">
+                    <span id="turn-cycle-error" class="error-message"></span>
                 </div>
                 
                 <!-- <div class="form-group">
@@ -48,6 +66,7 @@
         <div class="setup-preview">
             <h2>Starting position</h2>
             <div class="stone-toolbar">
+                <button type="button" class="stone-btn" data-color="-1" title="Delete">✖️</button>
                 <button type="button" class="stone-btn" data-color="1" title="Black">⚫</button>
                 <button type="button" class="stone-btn" data-color="2" title="White">⚪</button>
                 <button type="button" class="stone-btn" data-color="3" title="Red">🔴</button>

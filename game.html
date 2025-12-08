@@ -21,8 +21,14 @@
     <script src="/board.js"></script>
 </head>
 <body class="game-body">
-    <!-- Hidden game ID for reference -->
-    <div id="game-id" style="display: none;"></div>
+    <div class="game-container">
+        <div id="board-container"></div>
+        <div id="players-sidebar">
+            <h3>Players</h3>
+            <div id="player-cards"></div>
+            <div id="game-controls"></div>
+        </div>
+    </div>
     
     <!-- Firebase configuration -->
     <script src="/firebase-config.js"></script>

@@ -4,21 +4,17 @@
     box-sizing: border-box;
 }
 
+html {
+    background-color: rgb(221, 221, 221);
+}
+
 body {
     font-family: 'Arial', sans-serif;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     min-height: 100vh;
     display: flex;
     justify-content: center;
     align-items: center;
     padding: 20px;
-}
-
-/* Full-screen game body */
-body.game-body {
-    padding: 0;
-    margin: 0;
-    overflow: hidden;
 }
 
 .container {
@@ -29,6 +25,149 @@ body.game-body {
     text-align: center;
     max-width: 800px;
     width: 100%;
+}
+
+/* Game page layout */
+.game-body {
+    padding: 0;
+    margin: 0;
+    overflow: hidden;
+    background-color: rgb(221, 221, 221);
+}
+
+.game-container {
+    display: flex;
+    width: 100vw;
+    height: 100vh;
+}
+
+#board-container {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgb(255, 193, 140);
+}
+
+#board-container canvas {
+    display: block;
+}
+
+#players-sidebar {
+    width: 250px;
+    background: white;
+    padding: 20px;
+    box-shadow: -2px 0 10px rgba(0, 0, 0, 0.1);
+    overflow-y: auto;
+}
+
+#players-sidebar h3 {
+    margin: 0 0 15px 0;
+    color: #333;
+    font-size: 1.2em;
+}
+
+#player-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.player-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    border-radius: 8px;
+    background: #f5f5f5;
+    border: 2px solid transparent;
+    transition: all 0.2s ease;
+}
+
+.player-card.current-turn {
+    border-color: #667eea;
+    background: #f0f0ff;
+}
+
+.player-card.my-seat {
+    background: #e8f5e9;
+}
+
+.player-card.empty {
+    cursor: pointer;
+}
+
+.player-card.empty:hover {
+    background: #e3f2fd;
+    border-color: #90caf9;
+}
+
+.player-card.occupied {
+    cursor: default;
+}
+
+.player-stone {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.player-stone.color-1 { background: rgb(50, 50, 50); border: 2px solid rgb(25, 25, 25); }
+.player-stone.color-2 { background: rgb(255, 255, 255); border: 2px solid rgb(200, 200, 200); }
+.player-stone.color-3 { background: rgb(220, 50, 50); border: 2px solid rgb(150, 30, 30); }
+.player-stone.color-4 { background: rgb(50, 100, 220); border: 2px solid rgb(30, 60, 150); }
+.player-stone.color-5 { background: rgb(250, 250, 20); border: 2px solid rgb(150, 140, 10); }
+
+.player-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.player-label {
+    font-weight: bold;
+    color: #333;
+    font-size: 0.9em;
+}
+
+.player-uid {
+    font-size: 0.75em;
+    color: #666;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.player-empty {
+    color: #999;
+    font-style: italic;
+    font-size: 0.85em;
+}
+
+.player-score {
+    font-size: 0.9em;
+    font-weight: 600;
+    color: #333;
+    margin-top: 4px;
+}
+
+.join-btn {
+    padding: 4px 10px;
+    font-size: 0.8em;
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.join-btn:hover {
+    background: #5a6fd6;
+}
+
+.game-body canvas {
+    display: block;
 }
 
 h1 {
@@ -260,6 +399,63 @@ h2 {
     border-color: #667eea;
 }
 
+.form-group input.input-error {
+    border-color: #e74c3c;
+}
+
+.form-group input.input-error:focus {
+    border-color: #c0392b;
+}
+
+.error-message {
+    display: block;
+    color: #e74c3c;
+    font-size: 12px;
+    margin-top: 5px;
+    min-height: 16px;
+}
+
+.input-with-spinner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.input-with-spinner input {
+    flex: 1;
+    text-align: center;
+}
+
+.spinner-btn {
+    width: 36px;
+    height: 36px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    background: #fff;
+    font-size: 18px;
+    font-weight: bold;
+    color: #333;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.spinner-btn:hover:not(:disabled) {
+    border-color: #667eea;
+    background: #f0f0ff;
+}
+
+.spinner-btn:active:not(:disabled) {
+    background: #e0e0ff;
+}
+
+.spinner-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
 .back-link {
     color: #667eea;
     text-decoration: none;
@@ -276,4 +472,93 @@ h2 {
 /* Game page - minimal full-screen */
 .game-body canvas {
     display: block;
+}
+
+/* Game controls */
+#game-controls {
+    margin-top: 20px;
+    padding-top: 15px;
+    border-top: 1px solid #e0e0e0;
+}
+
+.start-game-btn {
+    width: 100%;
+    padding: 12px 20px;
+    font-size: 1em;
+    font-weight: 600;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: opacity 0.2s, transform 0.1s;
+}
+
+.start-game-btn:hover {
+    opacity: 0.9;
+    transform: translateY(-1px);
+}
+
+.start-game-btn:active {
+    transform: translateY(0);
+}
+
+.game-status {
+    text-align: center;
+    color: #666;
+    font-size: 0.9em;
+    padding: 10px;
+}
+
+.enter-scoring-btn,
+.exit-scoring-btn {
+    width: 100%;
+    padding: 10px 16px;
+    font-size: 0.9em;
+    font-weight: 500;
+    background: #f0f0f0;
+    color: #333;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.2s;
+    margin-top: 10px;
+}
+
+.enter-scoring-btn:hover,
+.exit-scoring-btn:hover {
+    background: #e0e0e0;
+}
+
+.accept-score-btn {
+    width: 100%;
+    padding: 12px 16px;
+    font-size: 1em;
+    font-weight: 600;
+    background: linear-gradient(135deg, #28a745 0%, #218838 100%);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: opacity 0.2s, transform 0.1s;
+    margin-top: 10px;
+}
+
+.accept-score-btn:hover:not(:disabled) {
+    opacity: 0.9;
+    transform: translateY(-1px);
+}
+
+.accept-score-btn:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+}
+
+.player-score.accepted {
+    color: #28a745;
+}
+
+.game-over-status {
+    font-weight: 600;
+    color: #28a745;
 }
