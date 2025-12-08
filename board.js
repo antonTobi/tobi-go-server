@@ -67,6 +67,10 @@ class Board {
             if (!pregameSequence) {
                 board.queue = [];
             }
+        }
+        
+        // Re-advance move order to pick up pregame sequence or custom turn cycle
+        if (pregameSequence || turnCycle) {
             board.advanceMoveOrder();
         }
         
@@ -608,16 +612,26 @@ const colorCharToInt = {
     "2": 2,
     "3": 3,
     "4": 4,
-    "5": 5
+    "5": 5,
+    "B": 1,
+    "W": 2,
+    "R": 3,
+    "C": 4,
+    "Y": 5,
 }
 
 const playerCharToInt = {
-    "R": 0,
+    "0": 0,
     "1": 1,
     "2": 2,
     "3": 3,
     "4": 4,
-    "5": 5
+    "5": 5,
+    "B": 1,
+    "W": 2,
+    "R": 3,
+    "C": 4,
+    "Y": 5,
 }
 
 class Move {
@@ -640,19 +654,19 @@ class Move {
                 [p, f, t] = s.split("")
                 break;
             default:
-                throw new Error(`Move "${s}" must be between 1, 2 or 3 characters (got ${s.length})`);
+                throw new Error(`Move "${s}" must be 1, 2 or 3 characters (got ${s.length})`);
         }
         let player = playerCharToInt[p]
         let from = colorCharToInt[f]
         let to = colorCharToInt[t]
         if (player === undefined) {
-            throw new Error(`Invalid player "${p}" in move "${s}". Valid: R,1,2,3,4,5`);
+            throw new Error(`Invalid player "${p}" in move "${s}".`);
         }
         if (from === undefined) {
-            throw new Error(`Invalid from-color "${f}" in move "${s}". Valid: -,0,1,2,3,4,5`);
+            throw new Error(`Invalid color "${f}" in move "${s}".`);
         }
         if (to === undefined) {
-            throw new Error(`Invalid to-color "${t}" in move "${s}". Valid: -,0,1,2,3,4,5`);
+            throw new Error(`Invalid color "${t}" in move "${s}".`);
         }
         return new this({player, from, to})
     }

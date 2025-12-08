@@ -40,6 +40,27 @@ window._debugSeats = () => ({ seats, mySeat, requiredSeats });
 // Initialize game
 initGame();
 
+// Setup sidebar toggle
+function setupSidebarToggle() {
+    const sidebar = document.getElementById('players-sidebar');
+    const toggleBtn = document.getElementById('sidebar-toggle');
+    const gameContainer = document.querySelector('.game-container');
+    
+    if (toggleBtn && sidebar && gameContainer) {
+        toggleBtn.addEventListener('click', () => {
+            sidebar.classList.toggle('collapsed');
+            gameContainer.classList.toggle('sidebar-collapsed');
+        });
+    }
+}
+
+// Call setup when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupSidebarToggle);
+} else {
+    setupSidebarToggle();
+}
+
 function initGame() {
     gameRef = db.ref(`games/${gameId}`);
     seatsRef = db.ref(`games/${gameId}/seats`);
