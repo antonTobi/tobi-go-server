@@ -648,7 +648,7 @@ class Move {
                 t = s
                 break;
             case 2:
-                [p, f] = s.split("")
+                [p, t] = s.split("")
                 break;
             case 3:
                 [p, f, t] = s.split("")
@@ -685,3 +685,5 @@ class Move {
 function orderFromString(s) {
     return s.replaceAll(" ", "").split(",").filter(m => m.length).map(m => Move.fromString(m))
 }
+
+console.log(orderFromString("B, 0R, W, 0R"))
