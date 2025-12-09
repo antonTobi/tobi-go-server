@@ -78,6 +78,15 @@ function setupSidebarToggle() {
             e.stopPropagation();
         }, { passive: true });
     }
+    
+    // Setup home button for mobile
+    const homeBtn = document.querySelector('.home-btn');
+    if (homeBtn) {
+        homeBtn.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            window.location.href = homeBtn.href;
+        }, { passive: false });
+    }
 }
 
 // Call setup when DOM is ready
