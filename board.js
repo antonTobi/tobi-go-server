@@ -344,6 +344,12 @@ class Board {
         return true;
     }
 
+    pass(c = this.currentMove.to) {
+        // A pass simply advances the move order without placing a stone
+        this.advanceMoveOrder();
+        this.moveHistory.push({ i: -1, c });
+    }
+
     // Find all stones of the same color that are in the same "region"
     // A region is defined by chains connected through empty intersections
     // (but not across enemy stones)
@@ -506,6 +512,104 @@ class Board {
         }
         
         return territory;
+    }
+
+    // Check if a stone's chain has 0 or 1 liberties (is dead or in atari)
+    isInAtari(stone) {
+        if (stone.color <= 0) return false;
+        
+        let visited = new Set();
+        let stack = [stone];
+        visited.add(stone);
+        let color = stone.color;
+        let libertyCount = 0;
+        let libertiesFound = new Set();
+
+        while (stack.length) {
+            let current = stack.pop();
+            for (let neighbor of current.neighbors) {
+                if (!visited.has(neighbor)) {
+                    if (neighbor.color === 0) {
+                        // Found a liberty
+                        if (!libertiesFound.has(neighbor)) {
+                            libertiesFound.add(neighbor);
+                            libertyCount++;
+                            if (libertyCount > 1) {
+                                return false; // More than 1 liberty, not in atari
+                            }
+                        }
+                    } else if (neighbor.color === color) {
+                        stack.push(neighbor);
+                        visited.add(neighbor);
+                    }
+                }
+            }
+        }
+
+        return true; // 0 or 1 liberties
+    }
+
+    // check whether a placement would be suicidal
+    isSuicide(node, color) {
+        let currentColor = node.color
+
+        // Temporarily place the stone
+        node.color = color;
+        
+        // Check if this move captures any enemy stones
+        let capturesEnemy = false;
+        for (let neighbor of node.neighbors) {
+            if (neighbor.color > 0 && neighbor.color !== color) {
+                let chain = this.findChainIfDead(neighbor);
+                if (chain.length > 0) {
+                    capturesEnemy = true;
+                    break;
+                }
+            }
+        }
+        
+        // If we capture enemy stones, it's not suicide
+        if (capturesEnemy) {
+            node.color = 0; // Restore
+            return false;
+        }
+        
+        // Check if our own stone/chain would be dead
+        let ownChain = this.findChainIfDead(node);
+        const isSuicidal = ownChain.length > 0;
+        
+        // Restore the board state
+        node.color = currentColor;
+        
+        return isSuicidal;
+    }
+
+    // check whether a placement would be self-atari (or suicide)
+    // Returns true if the resulting chain would have 0 or 1 liberties
+    isSelfAtari(node, color) {
+        let currentColor = node.color;
+
+        // Temporarily place the stone
+        node.color = color;
+        
+        // Check if this move captures any enemy stones - if so, it's not self-atari
+        for (let neighbor of node.neighbors) {
+            if (neighbor.color > 0 && neighbor.color !== color) {
+                let chain = this.findChainIfDead(neighbor);
+                if (chain.length > 0) {
+                    node.color = currentColor;
+                    return false;
+                }
+            }
+        }
+        
+        // Check if our own stone/chain is in atari (0 or 1 liberties)
+        const inAtari = this.isInAtari(node);
+        
+        // Restore the original node
+        node.color = currentColor;
+        
+        return inAtari;
     }
 
     draw(p, deadChains = null, canonicalIndexMap = null, territory = null) {

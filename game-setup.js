@@ -392,9 +392,9 @@ function generateGameId() {
 
 function joinGame(gameId) {
     if (window.location.href == "http://127.0.0.1:3000/game-setup.html" ) {
-        window.location.href = `/game.html?id=${gameId}`
+        window.location.replace(`/game.html?id=${gameId}`);
     } else {
-        window.location.href = `/game/${gameId}`;
+        window.location.replace(`/game/${gameId}`);
     }
 }
 

@@ -47,10 +47,22 @@ function setupSidebarToggle() {
     const gameContainer = document.querySelector('.game-container');
     
     if (toggleBtn && sidebar && gameContainer) {
-        toggleBtn.addEventListener('click', () => {
+        toggleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
             sidebar.classList.toggle('collapsed');
             gameContainer.classList.toggle('sidebar-collapsed');
         });
+        
+        // Prevent clicks on sidebar from reaching the canvas
+        sidebar.addEventListener('mousedown', (e) => {
+            e.stopPropagation();
+        });
+        sidebar.addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+        sidebar.addEventListener('touchstart', (e) => {
+            e.stopPropagation();
+        }, { passive: false });
     }
 }
 
@@ -158,7 +170,12 @@ function handleSeatsChanged(snapshot) {
 function handleMoveAdded(snapshot) {
     const move = snapshot.val();
     if (board && move.i != null && move.c) {
-        board.placeStone(move.i, move.c);
+        // Handle pass (index -1) vs normal move
+        if (move.i === -1) {
+            board.pass(move.c);
+        } else {
+            board.placeStone(move.i, move.c);
+        }
         
         // If in scoring mode or game over, recompute canonical index map and territory (handles page reload case)
         if (inScoring || gameOver) {
@@ -203,7 +220,21 @@ function handleScoringChanged(snapshot) {
 }
 
 function handleDeadChainsChanged(snapshot) {
-    deadChains = snapshot.val() || {};
+    const newDeadChains = snapshot.val() || {};
+    
+    // If deadChains changed and we're in scoring mode, activate cooldown
+    if (inScoring && !gameOver) {
+        const changed = JSON.stringify(deadChains) !== JSON.stringify(newDeadChains);
+        if (changed) {
+            acceptCooldown = true;
+            setTimeout(() => {
+                acceptCooldown = false;
+                renderGameControls();
+            }, 2000);
+        }
+    }
+    
+    deadChains = newDeadChains;
     
     // Recalculate territory
     if (inScoring && board && canonicalIndexMap) {
@@ -254,14 +285,6 @@ function enterScoring() {
         deadChains: null,
         acceptedScores: null
     });
-    
-    // Start cooldown to prevent immediate accept
-    acceptCooldown = true;
-    renderGameControls();
-    setTimeout(() => {
-        acceptCooldown = false;
-        renderGameControls();
-    }, 2000);
 }
 
 function exitScoring() {
@@ -280,14 +303,6 @@ function toggleDeadChain(stone) {
         [`deadChains/${canonicalIndex}`]: !currentState,
         acceptedScores: null
     });
-    
-    // Start cooldown to prevent immediate accept
-    acceptCooldown = true;
-    renderGameControls();
-    setTimeout(() => {
-        acceptCooldown = false;
-        renderGameControls();
-    }, 2000);
 }
 
 function acceptScore() {
@@ -322,38 +337,57 @@ function checkAllAccepted() {
 
 function processRandomMoves() {
     // Process all consecutive random moves (player === 0) until a human player's turn
-    while (board && board.currentMove.player === 0) {
-        const currentMove = board.currentMove;
-        
-        // Find empty intersections
-        const emptyNodes = board.nodes.filter(n => n.color === currentMove.from);
-        if (emptyNodes.length === 0) {
-            console.log('No empty nodes for random placement');
-            return;
-        }
-        
-        // Pick a random empty node
-        const randomNode = emptyNodes[Math.floor(Math.random() * emptyNodes.length)];
-        
-        // Submit the move via transaction
-        const moveIndex = board.moveHistory.length;
-        const moveRef = movesRef.child(moveIndex);
-        moveRef.transaction((currentValue) => {
-            if (currentValue !== null) {
-                return; // Abort - move already exists
-            }
-            return { i: randomNode.i, c: currentMove.to };
-        }, (error, committed) => {
-            if (error) {
-                console.error('Random move transaction failed:', error);
-            } else if (committed) {
-                console.log('Random move placed at node', randomNode.i);
-            }
-        });
-        
-        // Locally place the stone so we can continue processing
-        board.placeStone(randomNode.i, currentMove.to);
+    // Uses setTimeout to add a 1 second delay between each random move
+    
+    if (!board || board.currentMove.player !== 0) {
+        return; // No random move to process
     }
+    
+    const currentMove = board.currentMove;
+    
+    // Find legal intersections
+    // TODO: Disallow eye-filling self-atari, but not other self-atari
+    // new def of eye-filling: all neighbors same chain
+    const candidates = board.nodes.filter(n => n.color === currentMove.from
+        && !board.isSuicide(n, currentMove.to));
+    
+    // Determine the move to submit: either a random candidate or a pass (-1)
+    let moveIndex;
+    let moveData;
+    
+    if (candidates.length === 0) {
+        // No legal moves available - submit a pass
+        console.log('No legal moves for random player, passing');
+        moveIndex = board.moveHistory.length;
+        moveData = { i: -1, c: currentMove.to };
+    } else {
+        // Pick a random candidate
+        const pickedMove = candidates[Math.floor(Math.random() * candidates.length)];
+        moveIndex = board.moveHistory.length;
+        moveData = { i: pickedMove.i, c: currentMove.to };
+    }
+    
+    // Submit the move via transaction
+    const moveRef = movesRef.child(moveIndex);
+    moveRef.transaction((currentValue) => {
+        if (currentValue !== null) {
+            return; // Abort - move already exists
+        }
+        return moveData;
+    }, (error, committed) => {
+        if (error) {
+            console.error('Random move transaction failed:', error);
+        } else if (committed) {
+            if (moveData.i === -1) {
+                console.log('Random player passed');
+            } else {
+                console.log('Random move placed at node', moveData.i);
+            }
+            // Schedule next random move after 1 second delay if needed
+            // The move will be applied via handleMoveAdded before this fires
+            setTimeout(processRandomMoves, 1000);
+        }
+    });
 }
 
 function takeSeat(playerNum) {
@@ -413,8 +447,8 @@ function addMove(i, c) {
             console.log('Move already made from different client');
         } else {
             console.log('Move added:', i, c);
-            // Process any following random moves
-            processRandomMoves();
+            // Process any following random moves after 1 second delay
+            setTimeout(processRandomMoves, 1000);
         }
     });
 }
@@ -636,7 +670,7 @@ function createSketch() {
             }
         };
 
-        p.mousePressed = function() {
+        function handlePress() {
             if (!board || gameOver) return;
             
             if (inScoring) {
@@ -650,6 +684,15 @@ function createSketch() {
                 hoverNode = null;
                 p.redraw();
             }
+        }
+
+        p.mousePressed = function() {
+            handlePress();
+        };
+
+        p.touchStarted = function() {
+            handlePress();
+            return false; // Prevent default behavior
         };
 
         p.windowResized = function() {
