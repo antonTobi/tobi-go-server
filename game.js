@@ -47,13 +47,24 @@ function setupSidebarToggle() {
     const gameContainer = document.querySelector('.game-container');
     
     if (toggleBtn && sidebar && gameContainer) {
-        toggleBtn.addEventListener('click', (e) => {
+        // Toggle button handler - works for both click and touch
+        const toggleSidebar = (e) => {
+            e.preventDefault();
             e.stopPropagation();
             sidebar.classList.toggle('collapsed');
             gameContainer.classList.toggle('sidebar-collapsed');
-        });
+        };
         
-        // Prevent clicks on sidebar from reaching the canvas
+        toggleBtn.addEventListener('click', toggleSidebar);
+        toggleBtn.addEventListener('touchend', toggleSidebar, { passive: false });
+        
+        // Prevent toggle button touchstart from propagating but don't block the event
+        toggleBtn.addEventListener('touchstart', (e) => {
+            e.stopPropagation();
+        }, { passive: true });
+        
+        // Prevent clicks/touches on sidebar content from reaching the canvas
+        // But don't block events on elements inside the sidebar
         sidebar.addEventListener('mousedown', (e) => {
             e.stopPropagation();
         });
@@ -62,7 +73,10 @@ function setupSidebarToggle() {
         });
         sidebar.addEventListener('touchstart', (e) => {
             e.stopPropagation();
-        }, { passive: false });
+        }, { passive: true });
+        sidebar.addEventListener('touchend', (e) => {
+            e.stopPropagation();
+        }, { passive: true });
     }
 }
 
@@ -670,28 +684,38 @@ function createSketch() {
             }
         };
 
-        function handlePress() {
+        function handlePress(x, y) {
             if (!board || gameOver) return;
             
             if (inScoring) {
                 // In scoring mode, toggle dead state of clicked chain
-                const clickedNode = board.findHover(p.mouseX, p.mouseY, false);
+                const clickedNode = board.findHover(x, y, false);
                 if (clickedNode && clickedNode.color > 0) {
                     toggleDeadChain(clickedNode);
                 }
-            } else if (hoverNode && canMakeMove()) {
-                addMove(hoverNode.i, board.currentMove.to);
-                hoverNode = null;
-                p.redraw();
+            } else if (canMakeMove()) {
+                // Find the node at touch/click position
+                const clickedNode = board.findHover(x, y);
+                if (clickedNode) {
+                    addMove(clickedNode.i, board.currentMove.to);
+                    hoverNode = null;
+                    p.redraw();
+                }
             }
         }
 
         p.mousePressed = function() {
-            handlePress();
+            handlePress(p.mouseX, p.mouseY);
         };
 
-        p.touchStarted = function() {
-            handlePress();
+        p.touchStarted = function(event) {
+            // Use the first touch point, translated to canvas coordinates
+            if (p.touches.length > 0) {
+                handlePress(p.touches[0].x, p.touches[0].y);
+            } else {
+                // Fallback to mouseX/mouseY
+                handlePress(p.mouseX, p.mouseY);
+            }
             return false; // Prevent default behavior
         };
 
