@@ -250,6 +250,7 @@ function handleDeadChainsChanged(snapshot) {
         const changed = JSON.stringify(deadChains) !== JSON.stringify(newDeadChains);
         if (changed) {
             acceptCooldown = true;
+            renderGameControls(); // Re-render to show disabled button
             setTimeout(() => {
                 acceptCooldown = false;
                 renderGameControls();
