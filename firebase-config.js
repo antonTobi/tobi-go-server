@@ -27,46 +27,59 @@ try {
     db = firebase.database();
     auth = firebase.auth();
     
+    // Check for redirect result FIRST, before any other auth operations
+    auth.getRedirectResult()
+        .then((result) => {
+            console.log('getRedirectResult:', result);
+            
+            // Check if we got a result from redirect (either sign-in or link)
+            if (result && result.user) {
+                console.log('Google redirect successful, user:', result.user.uid, 'operationType:', result.operationType);
+                console.log('User isAnonymous:', result.user.isAnonymous);
+                
+                // Use Google display name if user doesn't have one set
+                if (result.user.displayName) {
+                    db.ref(`users/${result.user.uid}/displayName`).once('value').then(snapshot => {
+                        if (!snapshot.val()) {
+                            db.ref(`users/${result.user.uid}/displayName`).set(result.user.displayName);
+                            displayNameCache[result.user.uid] = result.user.displayName;
+                            console.log('Set display name from Google:', result.user.displayName);
+                        }
+                    });
+                }
+            }
+        })
+        .catch((error) => {
+            console.error('getRedirectResult error:', error);
+            // Handle the case where the Google account is already linked to another user
+            if (error.code === 'auth/credential-already-in-use') {
+                console.log('Credential already in use, signing in with existing account');
+                if (error.credential) {
+                    return auth.signInWithCredential(error.credential);
+                }
+            }
+            // Dispatch error event for UI to handle
+            window.dispatchEvent(new CustomEvent('authError', { detail: { error } }));
+        });
+    
     // Set persistence to LOCAL (survives browser restarts)
     auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
         .then(() => {
             console.log('Firebase initialized with persistent auth');
             
-            // Check for redirect result from Google sign-in
-            return auth.getRedirectResult();
-        })
-        .then((result) => {
-            if (result && result.user) {
-                console.log('Google redirect sign-in successful');
-                // Use Google display name if user doesn't have one set
-                if (result.user.displayName) {
-                    return getDisplayName(result.user.uid).then(existingName => {
-                        if (!existingName) {
-                            return setDisplayName(result.user.displayName);
-                        }
-                    });
-                }
-            }
             // Only sign in anonymously if not already signed in
             if (!auth.currentUser) {
+                console.log('No current user, signing in anonymously');
                 return auth.signInAnonymously();
+            } else {
+                console.log('Already signed in as:', auth.currentUser.uid, 'isAnonymous:', auth.currentUser.isAnonymous);
             }
         })
         .then(() => {
             console.log('Auth ready');
         })
         .catch((error) => {
-            // Handle the case where the Google account is already linked to another user
-            if (error.code === 'auth/credential-already-in-use') {
-                console.log('Credential already in use, signing in with existing account');
-                // The credential is available in error.credential for Google
-                if (error.credential) {
-                    return auth.signInWithCredential(error.credential);
-                }
-            }
             console.error('Auth initialization failed:', error);
-            // Dispatch error event for UI to handle
-            window.dispatchEvent(new CustomEvent('authError', { detail: { error } }));
         });
     
     // Listen for auth state changes
