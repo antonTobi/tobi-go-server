@@ -489,31 +489,24 @@ function calculateScores() {
     return scores;
 }
 
-function renderPlayerCards() {
+// Cache for player display names
+const playerDisplayNames = {};
+
+// Track if player cards have been initialized
+let playerCardsInitialized = false;
+
+// Initialize player card elements once
+function initPlayerCards() {
     const container = document.getElementById('player-cards');
-    if (!container) return;
+    if (!container || playerCardsInitialized) return;
     
     container.innerHTML = '';
     
-    // Calculate scores if in scoring mode or game over
-    const scores = (inScoring || gameOver) ? calculateScores() : {};
-    
     requiredSeats.forEach(playerNum => {
-        const odIndex = seats[playerNum];
-        const isOccupied = !!odIndex;
-        const isMe = currentUser && odIndex === currentUser.uid;
-        const isCurrentTurn = board && board.currentMove.player === playerNum;
-        
         const card = document.createElement('div');
         card.className = 'player-card';
-        if (isCurrentTurn && !inScoring) card.classList.add('current-turn');
-        if (isMe) card.classList.add('my-seat');
-        if (isOccupied && !isMe) {
-            card.classList.add('occupied');
-        } else {
-            card.classList.add('empty');
-            card.onclick = () => takeSeat(playerNum);
-        }
+        card.id = `player-card-${playerNum}`;
+        card.onclick = () => takeSeat(playerNum);
         
         // Stone icon
         const stone = document.createElement('div');
@@ -529,32 +522,125 @@ function renderPlayerCards() {
         label.textContent = `Player ${playerNum}`;
         info.appendChild(label);
         
-        if (isOccupied) {
-            const uidDisplay = document.createElement('div');
-            uidDisplay.className = 'player-uid';
-            uidDisplay.textContent = isMe ? 'You' : odIndex.substring(0, 12) + '...';
-            info.appendChild(uidDisplay);
-        } else {
-            const emptyLabel = document.createElement('div');
-            emptyLabel.className = 'player-empty';
-            emptyLabel.textContent = 'Click to join';
-            info.appendChild(emptyLabel);
-        }
+        // Player name/status display (will be updated dynamically)
+        const nameDisplay = document.createElement('div');
+        nameDisplay.className = 'player-uid';
+        nameDisplay.id = `player-name-${playerNum}`;
+        info.appendChild(nameDisplay);
         
-        // Show score when in scoring mode or game over
-        if (inScoring || gameOver) {
-            const scoreDisplay = document.createElement('div');
-            scoreDisplay.className = 'player-score';
-            const scoreText = `Score: ${scores[playerNum] || 0}`;
-            const hasAccepted = acceptedScores[playerNum] === true;
-            scoreDisplay.textContent = hasAccepted ? `${scoreText} ✓` : scoreText;
-            if (hasAccepted) scoreDisplay.classList.add('accepted');
-            info.appendChild(scoreDisplay);
-        }
+        // Score display (will be shown/hidden dynamically)
+        const scoreDisplay = document.createElement('div');
+        scoreDisplay.className = 'player-score';
+        scoreDisplay.id = `player-score-${playerNum}`;
+        info.appendChild(scoreDisplay);
         
         card.appendChild(info);
         container.appendChild(card);
     });
+    
+    playerCardsInitialized = true;
+}
+
+async function renderPlayerCards() {
+    const container = document.getElementById('player-cards');
+    if (!container) return;
+    
+    // Initialize cards if not already done
+    if (!playerCardsInitialized) {
+        initPlayerCards();
+    }
+    
+    // Calculate scores if in scoring mode or game over
+    const scores = (inScoring || gameOver) ? calculateScores() : {};
+    
+    // Fetch display names for all seated players (non-blocking for UI)
+    const namePromises = [];
+    requiredSeats.forEach(playerNum => {
+        const odIndex = seats[playerNum];
+        if (odIndex && !playerDisplayNames[odIndex]) {
+            namePromises.push(
+                getDisplayName(odIndex).then(name => {
+                    if (name) {
+                        playerDisplayNames[odIndex] = name;
+                        // Update just this player's name display after fetching
+                        updatePlayerName(playerNum, odIndex);
+                    }
+                })
+            );
+        }
+    });
+    
+    // Update all cards immediately with current data
+    requiredSeats.forEach(playerNum => {
+        const odIndex = seats[playerNum];
+        const isOccupied = !!odIndex;
+        const isMe = currentUser && odIndex === currentUser.uid;
+        const isCurrentTurn = board && board.currentMove.player === playerNum;
+        
+        const card = document.getElementById(`player-card-${playerNum}`);
+        if (!card) return;
+        
+        // Update card classes
+        card.className = 'player-card';
+        if (isCurrentTurn && !inScoring) card.classList.add('current-turn');
+        if (isMe) card.classList.add('my-seat');
+        if (isOccupied && !isMe) {
+            card.classList.add('occupied');
+        } else {
+            card.classList.add('empty');
+        }
+        
+        // Update name display
+        const nameDisplay = document.getElementById(`player-name-${playerNum}`);
+        if (nameDisplay) {
+            if (isOccupied) {
+                nameDisplay.className = 'player-uid';
+                if (isMe) {
+                    nameDisplay.textContent = 'You';
+                } else {
+                    // Use display name if available, otherwise truncated UID
+                    const displayName = playerDisplayNames[odIndex];
+                    nameDisplay.textContent = displayName || odIndex.substring(0, 12) + '...';
+                }
+            } else {
+                nameDisplay.className = 'player-empty';
+                nameDisplay.textContent = 'Click to join';
+            }
+        }
+        
+        // Update score display
+        const scoreDisplay = document.getElementById(`player-score-${playerNum}`);
+        if (scoreDisplay) {
+            if (inScoring || gameOver) {
+                const scoreText = `Score: ${scores[playerNum] || 0}`;
+                const hasAccepted = acceptedScores[playerNum] === true;
+                scoreDisplay.textContent = hasAccepted ? `${scoreText} ✓` : scoreText;
+                scoreDisplay.className = 'player-score' + (hasAccepted ? ' accepted' : '');
+                scoreDisplay.style.display = '';
+            } else {
+                scoreDisplay.textContent = '';
+                scoreDisplay.style.display = 'none';
+            }
+        }
+    });
+    
+    // Wait for name fetches to complete (updates happen via callback above)
+    await Promise.all(namePromises);
+}
+
+// Helper to update just a player's name (called after async name fetch)
+function updatePlayerName(playerNum, odIndex) {
+    const isMe = currentUser && odIndex === currentUser.uid;
+    const nameDisplay = document.getElementById(`player-name-${playerNum}`);
+    if (nameDisplay && odIndex) {
+        nameDisplay.className = 'player-uid';
+        if (isMe) {
+            nameDisplay.textContent = 'You';
+        } else {
+            const displayName = playerDisplayNames[odIndex];
+            nameDisplay.textContent = displayName || odIndex.substring(0, 12) + '...';
+        }
+    }
 }
 
 function renderGameControls() {

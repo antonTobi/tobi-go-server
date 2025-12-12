@@ -644,3 +644,327 @@ h2 {
     font-weight: 600;
     color: #28a745;
 }
+
+/* User Profile Section */
+.user-profile-section {
+    background: #f8f9fa;
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+    text-align: left;
+}
+
+.display-name-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.display-name-row label {
+    font-weight: 500;
+    color: #333;
+    white-space: nowrap;
+}
+
+.display-name-row input {
+    flex: 1;
+    min-width: 120px;
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 14px;
+    transition: border-color 0.2s;
+}
+
+.display-name-row input:focus {
+    outline: none;
+    border-color: #667eea;
+}
+
+.btn-small {
+    padding: 8px 16px;
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.btn-small:hover {
+    background: #5a6fd6;
+}
+
+.btn-small:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+}
+
+.display-name-status {
+    font-size: 12px;
+    margin-top: 8px;
+    min-height: 16px;
+}
+
+.display-name-status.success {
+    color: #28a745;
+}
+
+.display-name-status.error {
+    color: #dc3545;
+}
+
+/* Account Section */
+.account-section {
+    margin-top: 15px;
+    padding-top: 15px;
+    border-top: 1px solid #e0e0e0;
+}
+
+.account-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+#account-type-label {
+    font-size: 13px;
+    color: #666;
+}
+
+.btn-link {
+    background: none;
+    border: none;
+    color: #667eea;
+    cursor: pointer;
+    font-size: 13px;
+    padding: 4px 8px;
+    text-decoration: underline;
+}
+
+.btn-link:hover {
+    color: #5a6fd6;
+}
+
+.btn-link.hidden {
+    display: none;
+}
+
+/* Auth Forms */
+.auth-forms {
+    margin-top: 15px;
+}
+
+.auth-forms.hidden {
+    display: none;
+}
+
+.auth-tabs {
+    display: flex;
+    gap: 5px;
+    margin-bottom: 15px;
+}
+
+.auth-tab {
+    flex: 1;
+    padding: 8px 12px;
+    background: #e9ecef;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.auth-tab:hover {
+    background: #dee2e6;
+}
+
+.auth-tab.active {
+    background: #667eea;
+    color: white;
+}
+
+.auth-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.auth-form.hidden {
+    display: none;
+}
+
+.auth-form input {
+    padding: 10px 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 14px;
+}
+
+.auth-form input:focus {
+    outline: none;
+    border-color: #667eea;
+}
+
+.btn-full {
+    width: 100%;
+    padding: 12px;
+}
+
+.auth-divider {
+    display: flex;
+    align-items: center;
+    margin: 5px 0;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #ddd;
+}
+
+.auth-divider span {
+    padding: 0 10px;
+    color: #999;
+    font-size: 12px;
+}
+
+.btn-google {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    padding: 10px;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-google:hover {
+    background: #f8f9fa;
+    border-color: #ccc;
+}
+
+.btn-google svg {
+    flex-shrink: 0;
+}
+
+.auth-error {
+    background: #f8d7da;
+    color: #721c24;
+    padding: 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    margin-top: 10px;
+}
+
+.auth-error.hidden {
+    display: none;
+}
+
+/* Signed In Section */
+.signed-in-section {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 10px;
+}
+
+.signed-in-section.hidden {
+    display: none;
+}
+
+#signed-in-email {
+    font-size: 13px;
+    color: #333;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* Mobile responsive styles */
+@media (max-width: 600px) {
+    body {
+        padding: 10px;
+        align-items: flex-start;
+    }
+    
+    .container {
+        padding: 20px;
+        border-radius: 10px;
+    }
+    
+    h1 {
+        font-size: 1.5em;
+    }
+    
+    .user-profile-section {
+        padding: 15px;
+    }
+    
+    .display-name-row {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+    }
+    
+    .display-name-row label {
+        text-align: left;
+    }
+    
+    .display-name-row input {
+        width: 100%;
+    }
+    
+    .btn-small {
+        width: 100%;
+    }
+    
+    .account-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+    
+    .auth-tabs {
+        flex-direction: column;
+    }
+    
+    .auth-tab {
+        width: 100%;
+    }
+    
+    .btn-google {
+        padding: 12px;
+        font-size: 15px;
+    }
+    
+    .btn-primary {
+        padding: 12px 30px;
+        font-size: 16px;
+    }
+    
+    #games-list {
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 15px;
+    }
+    
+    .game-thumbnail {
+        aspect-ratio: 1;
+    }
+    
+    .thumbnail-canvas {
+        width: 150px;
+        height: 150px;
+    }
+}
