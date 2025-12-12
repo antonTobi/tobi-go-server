@@ -191,6 +191,8 @@ async function signInWithGoogle() {
             const result = await auth.signInWithPopup(provider);
             console.log('signInWithGoogle: Popup successful');
             
+            currentUser = result.user;
+            
             // Use Google display name if user doesn't have one set
             if (result.user && result.user.displayName) {
                 const existingName = await getDisplayName(result.user.uid);
@@ -198,6 +200,10 @@ async function signInWithGoogle() {
                     await setDisplayName(result.user.displayName);
                 }
             }
+            
+            // Dispatch auth ready event to update UI
+            window.dispatchEvent(new CustomEvent('authReady', { detail: { user: result.user } }));
+            
             return result.user;
         } catch (popupError) {
             // If popup is blocked or fails, fall back to redirect
@@ -247,6 +253,11 @@ async function linkWithGoogle() {
             const result = await currentUser.linkWithPopup(provider);
             console.log('linkWithGoogle: Popup successful');
             
+            // Reload the user to get updated auth state
+            await result.user.reload();
+            // Update currentUser reference
+            currentUser = auth.currentUser;
+            
             // Use Google display name if user doesn't have one set
             if (result.user && result.user.displayName) {
                 const existingName = await getDisplayName(result.user.uid);
@@ -254,7 +265,11 @@ async function linkWithGoogle() {
                     await setDisplayName(result.user.displayName);
                 }
             }
-            return result.user;
+            
+            // Dispatch auth ready event to update UI
+            window.dispatchEvent(new CustomEvent('authReady', { detail: { user: auth.currentUser } }));
+            
+            return auth.currentUser;
         } catch (popupError) {
             // If popup is blocked or fails, fall back to redirect
             if (popupError.code === 'auth/popup-blocked' || 
@@ -264,6 +279,19 @@ async function linkWithGoogle() {
                 await currentUser.linkWithRedirect(provider);
                 return null; // Will be handled by getRedirectResult
             }
+            
+            // If credential is already in use, sign in with that credential instead
+            if (popupError.code === 'auth/credential-already-in-use') {
+                console.log('linkWithGoogle: Credential already in use, signing in with existing account');
+                const credential = popupError.credential;
+                if (credential) {
+                    const result = await auth.signInWithCredential(credential);
+                    currentUser = result.user;
+                    window.dispatchEvent(new CustomEvent('authReady', { detail: { user: result.user } }));
+                    return result.user;
+                }
+            }
+            
             throw popupError;
         }
     } catch (error) {
