@@ -250,24 +250,31 @@ async function handleEmailSignUp() {
 async function handleGoogleAuth() {
     hideAuthError();
     
-    // Show loading state since redirect will take user away
+    // Show loading state
     const googleBtns = document.querySelectorAll('.btn-google');
     googleBtns.forEach(btn => {
         btn.disabled = true;
-        btn.textContent = 'Redirecting to Google...';
+        btn.textContent = 'Connecting to Google...';
     });
     
     try {
+        let user;
         // If currently anonymous, try to link first
         if (isAnonymous()) {
-            await linkWithGoogle();
+            user = await linkWithGoogle();
         } else {
-            await signInWithGoogle();
+            user = await signInWithGoogle();
         }
-        // Note: The redirect happens here, so the code below won't execute
-        // until the user returns from Google auth
+        
+        // If popup was used and succeeded, user will be returned
+        // If redirect was used, user will be null and page will redirect
+        if (user) {
+            console.log('Google auth successful via popup:', user.uid);
+            document.getElementById('auth-forms').classList.add('hidden');
+        }
+        // If user is null, redirect is happening, so don't restore buttons
     } catch (error) {
-        // Re-enable buttons if there's an immediate error
+        // Re-enable buttons if there's an error
         googleBtns.forEach(btn => {
             btn.disabled = false;
             btn.innerHTML = `

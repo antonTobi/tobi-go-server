@@ -180,13 +180,36 @@ async function createAccountWithEmail(email, password) {
     }
 }
 
-// Sign in with Google (uses redirect for mobile compatibility)
+// Sign in with Google (tries popup first, falls back to redirect)
 async function signInWithGoogle() {
     try {
+        console.log('signInWithGoogle: Starting...');
         const provider = new firebase.auth.GoogleAuthProvider();
-        // Use redirect instead of popup for better mobile support and to avoid popup blockers
-        await auth.signInWithRedirect(provider);
-        // The result will be handled by getRedirectResult on page load
+        
+        // Try popup first (works better when not blocked)
+        try {
+            const result = await auth.signInWithPopup(provider);
+            console.log('signInWithGoogle: Popup successful');
+            
+            // Use Google display name if user doesn't have one set
+            if (result.user && result.user.displayName) {
+                const existingName = await getDisplayName(result.user.uid);
+                if (!existingName) {
+                    await setDisplayName(result.user.displayName);
+                }
+            }
+            return result.user;
+        } catch (popupError) {
+            // If popup is blocked or fails, fall back to redirect
+            if (popupError.code === 'auth/popup-blocked' || 
+                popupError.code === 'auth/popup-closed-by-user' ||
+                popupError.code === 'auth/cancelled-popup-request') {
+                console.log('signInWithGoogle: Popup blocked/closed, trying redirect...');
+                await auth.signInWithRedirect(provider);
+                return null; // Will be handled by getRedirectResult
+            }
+            throw popupError;
+        }
     } catch (error) {
         console.error('Google sign-in failed:', error);
         throw error;
@@ -209,17 +232,40 @@ async function linkWithEmail(email, password) {
     }
 }
 
-// Link anonymous account to Google (uses redirect for mobile compatibility)
+// Link anonymous account to Google (tries popup first, falls back to redirect)
 async function linkWithGoogle() {
     if (!currentUser) {
         throw new Error('Not authenticated');
     }
     
     try {
+        console.log('linkWithGoogle: Starting for user', currentUser.uid);
         const provider = new firebase.auth.GoogleAuthProvider();
-        // Use redirect instead of popup for better mobile support
-        await currentUser.linkWithRedirect(provider);
-        // The result will be handled by getRedirectResult on page load
+        
+        // Try popup first (works better when not blocked)
+        try {
+            const result = await currentUser.linkWithPopup(provider);
+            console.log('linkWithGoogle: Popup successful');
+            
+            // Use Google display name if user doesn't have one set
+            if (result.user && result.user.displayName) {
+                const existingName = await getDisplayName(result.user.uid);
+                if (!existingName) {
+                    await setDisplayName(result.user.displayName);
+                }
+            }
+            return result.user;
+        } catch (popupError) {
+            // If popup is blocked or fails, fall back to redirect
+            if (popupError.code === 'auth/popup-blocked' || 
+                popupError.code === 'auth/popup-closed-by-user' ||
+                popupError.code === 'auth/cancelled-popup-request') {
+                console.log('linkWithGoogle: Popup blocked/closed, trying redirect...');
+                await currentUser.linkWithRedirect(provider);
+                return null; // Will be handled by getRedirectResult
+            }
+            throw popupError;
+        }
     } catch (error) {
         console.error('Google linking failed:', error);
         throw error;
