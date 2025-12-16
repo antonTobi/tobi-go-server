@@ -1,11 +1,12 @@
-// Define colors for stones (1-5: black, white, red, blue, yellow)
+// Define colors for stones (1-5: black, white, red, yellow, cobalt)
+// Note: We use "Cobalt" instead of "Blue" to have a unique first ltter for each color.
 const stoneColors = [
     null,
     [50, 50, 50],        // 1: Black
     [255, 255, 255],     // 2: White
     [220, 50, 50],       // 3: Red
-    [50, 100, 220],      // 4: Blue
-    [250, 250, 20]       // 5: Yellow
+    [250, 250, 20],      // 4: Yellow
+    [50, 100, 220],      // 5: Cobalt
 ];
 
 const strokeColors = [
@@ -13,8 +14,17 @@ const strokeColors = [
     [25, 25, 25],        // 1: Black stroke
     [200, 200, 200],     // 2: White stroke
     [150, 30, 30],       // 3: Red stroke
-    [30, 60, 150],       // 4: Blue stroke
-    [150, 140, 10]       // 5: Yellow stroke
+    [150, 140, 10],      // 4: Yellow stroke
+    [30, 60, 150],       // 5: Cobalt stroke
+];
+
+const markerColors = [
+    null,
+    [255, 255, 255],
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0]
 ];
 
 const boardColor = [255, 193, 140]
@@ -32,9 +42,10 @@ class Node {
 
 class Board {
     // Main factory method that creates a board from a settings object
+    // TODO: merge constructor and fromSettings into a single constructor, get rid of duplicate advanceMoveOrder
     static fromSettings(settings) {
-        const { boardType, boardWidth, boardHeight, pregameSequence, turnCycle, presetStones } = settings;
-        
+        const { boardType, boardWidth, boardHeight, pregameSequence, turnCycle, presetStones, coupons } = settings;
+
         let board;
         switch (boardType) {
             case 'grid':
@@ -55,25 +66,24 @@ class Board {
             default:
                 board = this.grid(9, 9);
         }
-        
+
         // Apply pregame sequence if provided
         if (pregameSequence) {
             board.queue = orderFromString(pregameSequence);
+        } else {
+            board.queue = []
         }
-        
+
         // Apply turn cycle if provided
         if (turnCycle) {
             board.order = orderFromString(turnCycle);
-            if (!pregameSequence) {
-                board.queue = [];
-            }
         }
-        
+
         // Re-advance move order to pick up pregame sequence or custom turn cycle
         if (pregameSequence || turnCycle) {
             board.advanceMoveOrder();
         }
-        
+
         // Apply preset stones if provided
         if (presetStones && presetStones.length > 0) {
             presetStones.forEach(stone => {
@@ -83,7 +93,12 @@ class Board {
                 }
             });
         }
-        
+
+        // Apply list of coupon values if provided
+        if (coupons && coupons.length > 0) {
+            board.coupons = coupons
+        }
+
         return board;
     }
 
@@ -94,7 +109,7 @@ class Board {
                 nodes.push(new Node(x, y))
             }
         }
-        
+
         let hoshi = []
         if (w === 19 && h === 19) {
             hoshi = [60, 66, 72, 174, 180, 186, 174, 288, 294, 300]
@@ -106,7 +121,7 @@ class Board {
             nodes[i].hoshi = true
         }
 
-        return new this({nodes});
+        return new this({ nodes });
     }
 
     static hexagon(n) {
@@ -125,7 +140,7 @@ class Board {
             }
         }
         let nodes = coordinates.map(c => new Node(...c))
-        return new this({nodes})
+        return new this({ nodes })
     }
 
     static star(n) {
@@ -140,7 +155,7 @@ class Board {
             }
         }
         let nodes = coordinates.map(c => new Node(...c))
-        return new this({nodes});
+        return new this({ nodes });
     }
 
     static dodecagon(k) {
@@ -178,7 +193,7 @@ class Board {
             }
         }
         let nodes = coordinates.map(c => new Node(...c))
-        return new this({nodes});
+        return new this({ nodes });
     }
 
     static rotatedGrid(w, h = w) {
@@ -200,11 +215,10 @@ class Board {
         }
 
         let nodes = coordinates.map(c => new Node(...c))
-        return new this({nodes});
+        return new this({ nodes });
     }
 
-    constructor({nodes, initial = "", order = "101,202"}) {
-        // this.turn = 0;
+    constructor({ nodes, initial = "", order = "B,W" }) {
         this.nodes = nodes;
 
         nodes.forEach((node, index) => {
@@ -314,7 +328,7 @@ class Board {
 
         node.color = c;
         this.advanceMoveOrder()
-        this.moveHistory.push({i, c})
+        this.moveHistory.push({ i, c })
 
         // Capture opponent stones
         let capturedChains = [];
@@ -355,17 +369,17 @@ class Board {
     // (but not across enemy stones)
     findChainsInRegion(stone) {
         if (stone.color <= 0) return [];
-        
+
         const color = stone.color;
         const visited = new Set();
         const regionStones = [];
         const stack = [stone];
-        
+
         while (stack.length) {
             const current = stack.pop();
             if (visited.has(current)) continue;
             visited.add(current);
-            
+
             if (current.color === color) {
                 // This is a stone of our color - add to result
                 regionStones.push(current);
@@ -385,7 +399,7 @@ class Board {
             }
             // If current.color is enemy color, don't explore further
         }
-        
+
         return regionStones;
     }
 
@@ -424,19 +438,19 @@ class Board {
     computeCanonicalIndexMap() {
         const map = {};
         const visited = new Set();
-        
+
         for (const node of this.nodes) {
             if (node.color <= 0 || visited.has(node.i)) continue;
-            
+
             const regionStones = this.findChainsInRegion(node);
             const canonicalIndex = this.getCanonicalRepresentative(regionStones);
-            
+
             for (const stone of regionStones) {
                 map[stone.i] = canonicalIndex;
                 visited.add(stone.i);
             }
         }
-        
+
         return map;
     }
 
@@ -444,7 +458,7 @@ class Board {
     // Uses precomputed canonicalIndexMap for efficiency
     isInDeadChain(node, deadChains, canonicalIndexMap) {
         if (!deadChains || !canonicalIndexMap || node.color <= 0) return false;
-        
+
         const canonicalIndex = canonicalIndexMap[node.i];
         return canonicalIndex !== undefined && deadChains[canonicalIndex] === true;
     }
@@ -457,13 +471,13 @@ class Board {
     calculateTerritory(deadChains, canonicalIndexMap) {
         const territory = {};
         const visited = new Set();
-        
+
         for (const node of this.nodes) {
             if (node.color === -1) continue; // Skip removed nodes
             if (visited.has(node.i)) continue;
-            
+
             const isDead = this.isInDeadChain(node, deadChains, canonicalIndexMap);
-            
+
             if (node.color > 0 && !isDead) {
                 // Alive stone - belongs to its own color
                 territory[node.i] = node.color;
@@ -474,19 +488,19 @@ class Board {
                 const surroundingColors = new Set();
                 const stack = [node];
                 const regionVisited = new Set();
-                
+
                 while (stack.length > 0) {
                     const current = stack.pop();
                     if (regionVisited.has(current.i)) continue;
                     if (current.color === -1) continue;
-                    
+
                     const currentIsDead = this.isInDeadChain(current, deadChains, canonicalIndexMap);
-                    
+
                     if (current.color === 0 || currentIsDead) {
                         // Empty or dead - part of this region
                         regionVisited.add(current.i);
                         region.push(current);
-                        
+
                         for (const neighbor of current.neighbors) {
                             if (!regionVisited.has(neighbor.i)) {
                                 stack.push(neighbor);
@@ -497,27 +511,27 @@ class Board {
                         surroundingColors.add(current.color);
                     }
                 }
-                
+
                 // Determine owner: if exactly one color surrounds, that color owns it
                 // Otherwise it's neutral (0)
-                const owner = surroundingColors.size === 1 
-                    ? Array.from(surroundingColors)[0] 
+                const owner = surroundingColors.size === 1
+                    ? Array.from(surroundingColors)[0]
                     : 0;
-                
+
                 for (const regionNode of region) {
                     territory[regionNode.i] = owner;
                     visited.add(regionNode.i);
                 }
             }
         }
-        
+
         return territory;
     }
 
     // Check if a stone's chain has 0 or 1 liberties (is dead or in atari)
     isInAtari(stone) {
         if (stone.color <= 0) return false;
-        
+
         let visited = new Set();
         let stack = [stone];
         visited.add(stone);
@@ -555,7 +569,7 @@ class Board {
 
         // Temporarily place the stone
         node.color = color;
-        
+
         // Check if this move captures any enemy stones
         let capturesEnemy = false;
         for (let neighbor of node.neighbors) {
@@ -567,20 +581,20 @@ class Board {
                 }
             }
         }
-        
+
         // If we capture enemy stones, it's not suicide
         if (capturesEnemy) {
             node.color = 0; // Restore
             return false;
         }
-        
+
         // Check if our own stone/chain would be dead
         let ownChain = this.findChainIfDead(node);
         const isSuicidal = ownChain.length > 0;
-        
+
         // Restore the board state
         node.color = currentColor;
-        
+
         return isSuicidal;
     }
 
@@ -591,7 +605,7 @@ class Board {
 
         // Temporarily place the stone
         node.color = color;
-        
+
         // Check if this move captures any enemy stones - if so, it's not self-atari
         for (let neighbor of node.neighbors) {
             if (neighbor.color > 0 && neighbor.color !== color) {
@@ -602,13 +616,13 @@ class Board {
                 }
             }
         }
-        
+
         // Check if our own stone/chain is in atari (0 or 1 liberties)
         const inAtari = this.isInAtari(node);
-        
+
         // Restore the original node
         node.color = currentColor;
-        
+
         return inAtari;
     }
 
@@ -626,11 +640,11 @@ class Board {
                 if (b.color === -1) continue
                 if (a.i < b.i) {
                     p.line(
-                    align(this.scale * a.x),
-                    align(this.scale * a.y),
-                    align(this.scale * b.x),
-                    align(this.scale * b.y)
-                );
+                        align(this.scale * a.x),
+                        align(this.scale * a.y),
+                        align(this.scale * b.x),
+                        align(this.scale * b.y)
+                    );
                 }
             }
         }
@@ -661,6 +675,33 @@ class Board {
                 }
                 p.stroke(...strokeColors[node.color]);
                 p.circle(node.x * this.scale, node.y * this.scale, this.scale - this.sw);
+            }
+        }
+
+        // Draw last-move marker
+        // Don't draw in scoring mode
+        if (!territory && this.moveHistory && this.moveHistory.length) {
+            let lastPlaced = null;
+            for (let k = this.moveHistory.length - 1; k >= 0; k--) {
+                if (this.moveHistory[k]?.i >= 0) {
+                    lastPlaced = this.moveHistory[k];
+                    break;
+                }
+            }
+
+            if (lastPlaced) {
+                const lastNode = this.nodes[lastPlaced.i];
+                const lastColor = lastNode?.color;
+                if (lastNode && lastColor > 0) {
+                    const markerSize = this.scale * 0.5;
+                    p.noFill()
+                    p.stroke(...markerColors[lastColor]);
+                    p.circle(
+                        lastNode.x * this.scale,
+                        lastNode.y * this.scale,
+                        markerSize
+                    );
+                }
             }
         }
 
@@ -710,32 +751,22 @@ class Board {
 }
 
 const colorCharToInt = {
-    "-": -1,
-    "0": 0,
-    "1": 1,
-    "2": 2,
-    "3": 3,
-    "4": 4,
-    "5": 5,
+    "V": -1,
+    "E": 0,
     "B": 1,
     "W": 2,
     "R": 3,
-    "C": 4,
-    "Y": 5,
+    "Y": 4,
+    "C": 5,
 }
 
 const playerCharToInt = {
-    "0": 0,
-    "1": 1,
-    "2": 2,
-    "3": 3,
-    "4": 4,
-    "5": 5,
+    "X": 0,
     "B": 1,
     "W": 2,
     "R": 3,
-    "C": 4,
-    "Y": 5,
+    "Y": 4,
+    "C": 5,
 }
 
 class Move {
@@ -744,8 +775,8 @@ class Move {
     static fromString(s) {
         let p, f, t
         p = s[0]
-        f = 0
-        t = 1
+        f = "E"
+        t = "B"
         switch (s.length) {
             case 1:
                 p = s
@@ -772,10 +803,10 @@ class Move {
         if (to === undefined) {
             throw new Error(`Invalid color "${t}" in move "${s}".`);
         }
-        return new this({player, from, to})
+        return new this({ player, from, to })
     }
 
-    constructor({player = 1, from = 0, to = 1, hidden = false}) {
+    constructor({ player = 1, from = 0, to = 1, hidden = false }) {
         this.player = player
         this.from = from
         this.to = to
@@ -783,11 +814,6 @@ class Move {
     }
 }
 
-// TODO: support notation like 9(1) or maybe 9x1 for 9 black moves.
-// How important is it to support 9(R1, R2) etc?
-// Would be nice to have and seems pretty doable so I should do it I guess.
 function orderFromString(s) {
     return s.replaceAll(" ", "").split(",").filter(m => m.length).map(m => Move.fromString(m))
 }
-
-console.log(orderFromString("B, 0R, W, 0R"))
