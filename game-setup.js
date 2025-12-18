@@ -105,10 +105,16 @@ function handleResize() {
     // Get the container's available space
     const rect = container.getBoundingClientRect();
     
+    // If container has no size yet, try again later
+    if (rect.width < 50 || rect.height < 50) {
+        requestAnimationFrame(handleResize);
+        return;
+    }
+    
     // Board should be square - use the smaller dimension
     // but limit to a reasonable maximum
     const maxSize = 600;
-    const size = Math.min(rect.width, rect.height, maxSize);
+    const size = Math.floor(Math.min(rect.width, rect.height, maxSize));
     
     if (size > 50) {
         boardP5.resizeCanvas(size, size);
@@ -223,6 +229,9 @@ function initBoardSketch() {
             isDragging = false;
             dragFromColor = null;
             dragToColor = null;
+            // Clear hover node to remove ghost stone
+            hoverNode = null;
+            p.redraw();
         }
 
         p.draw = () => {
