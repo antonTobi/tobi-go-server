@@ -1073,15 +1073,32 @@ function renderHistoryControls() {
 function createSketch() {
     return (p) => {
         p.setup = function() {
-            p.pixelDensity(1);
+            // Use default pixel density for crisp rendering on high-DPI screens
             const container = document.getElementById('board-container');
-            const size = Math.min(container.offsetWidth, container.offsetHeight);
+            
+            // Get available size, accounting for the container's actual dimensions
+            // Use clientWidth/clientHeight which don't include scrollbars
+            let availWidth = container.clientWidth;
+            let availHeight = container.clientHeight;
+            
+            // If dimensions are 0, the layout isn't ready yet - use a fallback
+            if (availWidth === 0 || availHeight === 0) {
+                availWidth = window.innerWidth;
+                availHeight = window.innerHeight - 200; // Rough estimate for bars
+            }
+            
+            const size = Math.min(availWidth, availHeight);
             let canvas = p.createCanvas(size, size);
             canvas.parent(container);
             p.noLoop();
             
             // Initialize board
             initializeBoard();
+            
+            // Re-check size after a short delay to handle late layout
+            setTimeout(() => {
+                p.windowResized();
+            }, 100);
         };
         
         function initializeBoard() {
@@ -1181,11 +1198,16 @@ function createSketch() {
 
         p.windowResized = function() {
             const container = document.getElementById('board-container');
-            const size = Math.min(container.offsetWidth, container.offsetHeight);
-            p.resizeCanvas(size, size);
-            if (board) {
-                board.calculateTransform(p.width, p.height);
-                p.redraw();
+            const availWidth = container.clientWidth || container.offsetWidth;
+            const availHeight = container.clientHeight || container.offsetHeight;
+            const size = Math.min(availWidth, availHeight);
+            
+            if (size > 0) {
+                p.resizeCanvas(size, size);
+                if (board) {
+                    board.calculateTransform(p.width, p.height);
+                    p.redraw();
+                }
             }
         };
 
