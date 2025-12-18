@@ -34,3 +34,7 @@ npm-debug.log*
 
 # Local Netlify folder
 .netlify
+
+# Local todo and docs
+TODO.md
+DOCS.md

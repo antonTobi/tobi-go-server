@@ -9,6 +9,17 @@ const stoneColors = [
     [50, 100, 220],      // 5: Cobalt
 ];
 
+// E: [255, 193, 140],
+
+// B: [50, 50, 50], 
+// W: [255, 255, 255], 
+// R: [255, 0, 0], 
+// Y: [240, 240, 0], 
+// C: [0, 36, 213], 
+// P: [255, 140, 162], 
+// T: [0, 128, 128], 
+// M: [255, 0, 255], 
+
 const strokeColors = [
     null,
     [25, 25, 25],        // 1: Black stroke
@@ -26,6 +37,10 @@ const markerColors = [
     [0, 0, 0],
     [0, 0, 0]
 ];
+
+// TODO: try redefining strokeColors and markerColors to be calculated based on stoneColors
+// (this would simplify allowing custom display colors)
+// possibly put boardColor inside the stoneColor array at position zero.
 
 const boardColor = [255, 193, 140]
 const gridColor = [64, 48, 35]
@@ -666,15 +681,13 @@ class Board {
                 const isDead = this.isInDeadChain(node, deadChains, canonicalIndexMap);
                 if (isDead) {
                     // Draw dead stones as ghost stones (semi-transparent)
-                    p.fill(...stoneColors[node.color], 127);
-                    // p.noStroke()
-                    // p.stroke(...strokeColors[node.color], 127);
+                    p.fill(...stoneColors[node.color], 150);
+                    p.noStroke()
                 } else {
                     p.fill(...stoneColors[node.color]);
-                    // p.stroke(...strokeColors[node.color]);
+                    p.stroke(...strokeColors[node.color]);
                 }
-                p.stroke(...strokeColors[node.color]);
-                p.circle(node.x * this.scale, node.y * this.scale, this.scale - this.sw);
+                p.circle(align(node.x * this.scale), align(node.y * this.scale), this.scale - this.sw);
             }
         }
 
@@ -697,8 +710,8 @@ class Board {
                     p.noFill()
                     p.stroke(...markerColors[lastColor]);
                     p.circle(
-                        lastNode.x * this.scale,
-                        lastNode.y * this.scale,
+                        align(lastNode.x * this.scale),
+                        align(lastNode.y * this.scale),
                         markerSize
                     );
                 }
@@ -717,7 +730,7 @@ class Board {
                     // Draw marker on empty intersections or dead stones
                     if (node.color === 0 || isDead) {
                         p.fill(...stoneColors[owner]);
-                        p.circle(node.x * this.scale, node.y * this.scale, markerSize);
+                        p.circle(align(node.x * this.scale), align(node.y * this.scale), markerSize);
                     }
                 }
             }

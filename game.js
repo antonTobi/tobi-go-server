@@ -33,9 +33,15 @@ let mySeat = null;       // The player number I'm sitting in (1-5), or null
 let requiredSeats = [];  // Player numbers that need seats (derived from turnCycle)
 let p5Instance = null;   // Reference to p5 sketch for redrawing
 
+// History navigation state
+let liveMoves = [];      // All moves from database, stored separately
+let viewIndex = 0;       // Current move index being viewed (0 = initial board, liveMoves.length = latest)
+let isViewingHistory = false; // True if user is viewing past moves (not auto-advancing)
+
 // Debug
 window._debugBoard = () => board;
 window._debugSeats = () => ({ seats, mySeat, requiredSeats });
+window._debugHistory = () => ({ liveMoves, viewIndex, isViewingHistory, totalMoves: liveMoves.length });
 
 // Initialize game
 initGame();
@@ -128,6 +134,7 @@ function initGame() {
             // Render initial UI
             renderPlayerCards();
             renderGameControls();
+            renderHistoryControls();
 
             // Listen for seat changes
             seatsRef.on('value', handleSeatsChanged);
@@ -149,6 +156,7 @@ function initGame() {
             
             // Listen for moves
             movesRef.on('child_added', handleMoveAdded);
+            movesRef.on('child_removed', handleMoveRemoved);
         })
         .catch((error) => {
             console.error('Error loading game:', error);
@@ -192,22 +200,43 @@ function handleSeatsChanged(snapshot) {
 
 function handleMoveAdded(snapshot) {
     const move = snapshot.val();
-    if (board && move.i != null && move.c) {
-        // Handle pass (index -1) vs normal move
-        if (move.i === -1) {
-            board.pass(move.c);
-        } else {
-            board.placeStone(move.i, move.c);
-        }
+    const moveIndex = parseInt(snapshot.key);
+    
+    if (move && move.i != null && move.c != null) {
+        // Store move in liveMoves array at the correct index
+        liveMoves[moveIndex] = move;
         
-        // If in scoring mode or game over, recompute canonical index map and territory (handles page reload case)
-        if (inScoring || gameOver) {
-            canonicalIndexMap = board.computeCanonicalIndexMap();
-            territory = board.calculateTerritory(deadChains, canonicalIndexMap);
+        // If we're viewing the latest move (not in history mode), auto-advance
+        if (!isViewingHistory) {
+            viewIndex = liveMoves.length;
+            rebuildBoardToView();
         }
         
         renderPlayerCards(); // Update current turn indicator
         renderGameControls(); // Update scoring button visibility
+        renderHistoryControls(); // Update navigation buttons
+        if (p5Instance) p5Instance.redraw();
+    }
+}
+
+function handleMoveRemoved(snapshot) {
+    const moveIndex = parseInt(snapshot.key);
+    
+    // Remove this move and all moves after it from liveMoves
+    // (Firebase may send multiple child_removed events, so we handle each individually)
+    if (moveIndex < liveMoves.length) {
+        liveMoves.length = moveIndex;
+        
+        // Adjust viewIndex if it's now beyond the available moves
+        if (viewIndex > liveMoves.length) {
+            viewIndex = liveMoves.length;
+            isViewingHistory = false;
+        }
+        
+        rebuildBoardToView();
+        renderPlayerCards();
+        renderGameControls();
+        renderHistoryControls();
         if (p5Instance) p5Instance.redraw();
     }
 }
@@ -282,6 +311,141 @@ function handleGameOverChanged(snapshot) {
     renderPlayerCards();
     renderGameControls();
     if (p5Instance) p5Instance.redraw();
+}
+
+// Rebuild the board state from scratch up to the current viewIndex
+function rebuildBoardToView() {
+    if (!board || !gameSettings) return;
+    
+    // Reset board to initial state
+    board = Board.fromSettings({
+        boardType: gameSettings.boardType || 'grid',
+        boardWidth: gameSettings.boardWidth || 9,
+        boardHeight: gameSettings.boardHeight || 9,
+        pregameSequence: gameSettings.pregameSequence || '',
+        turnCycle: gameSettings.turnCycle,
+        presetStones: gameSettings.presetStones
+    });
+    
+    // Recalculate transform with current canvas size
+    if (p5Instance) {
+        board.calculateTransform(p5Instance.width, p5Instance.height);
+    }
+    
+    // Replay moves up to viewIndex
+    for (let i = 0; i < viewIndex && i < liveMoves.length; i++) {
+        const move = liveMoves[i];
+        if (move) {
+            if (move.i === -1) {
+                board.pass(move.c);
+            } else {
+                board.placeStone(move.i, move.c);
+            }
+        }
+    }
+    
+    // If in scoring mode or game over AND viewing latest, recompute canonical index map and territory
+    const viewingLatest = viewIndex >= liveMoves.length;
+    if ((inScoring || gameOver) && viewingLatest) {
+        canonicalIndexMap = board.computeCanonicalIndexMap();
+        territory = board.calculateTerritory(deadChains, canonicalIndexMap);
+    } else {
+        canonicalIndexMap = null;
+        territory = null;
+    }
+}
+
+// History navigation functions
+function goToFirstMove() {
+    if (viewIndex === 0) return;
+    viewIndex = 0;
+    isViewingHistory = true;
+    rebuildBoardToView();
+    renderHistoryControls();
+    renderPlayerCards();
+    if (p5Instance) p5Instance.redraw();
+}
+
+function goToPrevMove() {
+    if (viewIndex <= 0) return;
+    viewIndex--;
+    isViewingHistory = true;
+    rebuildBoardToView();
+    renderHistoryControls();
+    renderPlayerCards();
+    if (p5Instance) p5Instance.redraw();
+}
+
+function goToNextMove() {
+    if (viewIndex >= liveMoves.length) return;
+    viewIndex++;
+    // If we've reached the latest move, exit history mode
+    if (viewIndex >= liveMoves.length) {
+        isViewingHistory = false;
+    }
+    rebuildBoardToView();
+    renderHistoryControls();
+    renderPlayerCards();
+    if (p5Instance) p5Instance.redraw();
+}
+
+function goToLastMove() {
+    if (viewIndex >= liveMoves.length) return;
+    viewIndex = liveMoves.length;
+    isViewingHistory = false;
+    rebuildBoardToView();
+    renderHistoryControls();
+    renderPlayerCards();
+    if (p5Instance) p5Instance.redraw();
+}
+
+function undoToCurrentPosition() {
+    // Only allow undo if: player is seated, viewing history, game not over, game started
+    if (mySeat === null || !isViewingHistory || gameOver || !gameStarted) {
+        console.error('Cannot undo: conditions not met');
+        return;
+    }
+    
+    const targetMoveCount = viewIndex;
+    
+    // Remove all moves from viewIndex onwards
+    const updates = {};
+    for (let i = targetMoveCount; i < liveMoves.length; i++) {
+        updates[i] = null;
+    }
+    
+    // Also exit scoring mode if we're in it
+    if (inScoring) {
+        gameRef.update({
+            inScoring: false,
+            deadChains: null,
+            acceptedScores: null
+        });
+    }
+    
+    movesRef.update(updates, (error) => {
+        if (error) {
+            console.error('Undo failed:', error);
+            return;
+        }
+        
+        console.log(`Undo successful: removed moves from ${targetMoveCount} to ${liveMoves.length - 1}`);
+        
+        // Update local state
+        liveMoves.length = targetMoveCount;
+        isViewingHistory = false;
+        viewIndex = targetMoveCount;
+        
+        // Rebuild board to the new position
+        rebuildBoardToView();
+        renderHistoryControls();
+        renderPlayerCards();
+        renderGameControls();
+        if (p5Instance) p5Instance.redraw();
+        
+        // Process any random moves that should follow
+        setTimeout(processRandomMoves, 500);
+    });
 }
 
 function isHost() {
@@ -382,12 +546,12 @@ function processRandomMoves() {
     if (candidates.length === 0) {
         // No legal moves available - submit a pass
         console.log('No legal moves for random player, passing');
-        moveIndex = board.moveHistory.length;
+        moveIndex = liveMoves.length;
         moveData = { i: -1, c: currentMove.to };
     } else {
         // Pick a random candidate
         const pickedMove = candidates[Math.floor(Math.random() * candidates.length)];
-        moveIndex = board.moveHistory.length;
+        moveIndex = liveMoves.length;
         moveData = { i: pickedMove.i, c: currentMove.to };
     }
     
@@ -448,7 +612,8 @@ function isMyTurn() {
 }
 
 function canMakeMove() {
-    return currentUser && isMyTurn();
+    // Can only make moves when viewing the latest position (not in history mode)
+    return currentUser && isMyTurn() && !isViewingHistory;
 }
 
 function addMove(i, c) {
@@ -457,7 +622,7 @@ function addMove(i, c) {
         return;
     }
     
-    const moveRef = movesRef.child(board.moveHistory.length);
+    const moveRef = movesRef.child(liveMoves.length);
 
     moveRef.transaction((currentValue) => {
         if (currentValue !== null) {
@@ -481,11 +646,16 @@ function calculateScores() {
     if (!territory) return {};
     
     const scores = {};
+    let maxScore = 0;
     for (const [nodeIndex, owner] of Object.entries(territory)) {
         if (owner > 0) {
             scores[owner] = (scores[owner] || 0) + 1;
+            if (scores[owner] > maxScore) {
+                maxScore = scores[owner];
+            }
         }
     }
+    scores.maxScore = maxScore;
     return scores;
 }
 
@@ -611,11 +781,25 @@ async function renderPlayerCards() {
         // Update score display
         const scoreDisplay = document.getElementById(`player-score-${playerNum}`);
         if (scoreDisplay) {
-            if (inScoring || gameOver) {
-                const scoreText = `Score: ${scores[playerNum] || 0}`;
-                const hasAccepted = acceptedScores[playerNum] === true;
-                scoreDisplay.textContent = hasAccepted ? `${scoreText} ✓` : scoreText;
-                scoreDisplay.className = 'player-score' + (hasAccepted ? ' accepted' : '');
+            // Only show scores when viewing the final position (not in history)
+            const viewingFinalPosition = viewIndex >= liveMoves.length;
+            const shouldShowScores = (inScoring || gameOver) && viewingFinalPosition;
+            
+            if (shouldShowScores) {
+                const score = scores[playerNum] || 0;
+                const scoreText = `Score: ${score}`;
+                
+                if (gameOver) {
+                    // Game is over - show trophy for winner(s), no checkmarks
+                    const isWinner = scores.maxScore > 0 && score === scores.maxScore;
+                    scoreDisplay.innerHTML = isWinner ? `🏆 ${scoreText}` : scoreText;
+                    scoreDisplay.className = 'player-score' + (isWinner ? ' winner' : '');
+                } else {
+                    // Still in scoring mode - show checkmarks for accepted
+                    const hasAccepted = acceptedScores[playerNum] === true;
+                    scoreDisplay.textContent = hasAccepted ? `${scoreText} ✓` : scoreText;
+                    scoreDisplay.className = 'player-score' + (hasAccepted ? ' accepted' : '');
+                }
                 scoreDisplay.style.display = '';
             } else {
                 scoreDisplay.textContent = '';
@@ -710,6 +894,58 @@ function renderGameControls() {
     }
 }
 
+function renderHistoryControls() {
+    const container = document.getElementById('history-controls');
+    if (!container) return;
+    
+    const totalMoves = liveMoves.length;
+    const atStart = viewIndex === 0;
+    const atEnd = viewIndex >= totalMoves;
+    
+    // Show undo button if: player is seated, viewing history (not at end), game not over, and game has started
+    const canUndo = mySeat !== null && isViewingHistory && !atEnd && !gameOver && gameStarted;
+    
+    let undoButtonHtml = '';
+    if (canUndo) {
+        undoButtonHtml = `
+            <button class="undo-btn" id="btn-undo" aria-label="Undo to here">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg>
+                Undo to here
+            </button>
+        `;
+    }
+    
+    container.innerHTML = `
+        <div class="history-nav">
+            <button class="history-btn" id="btn-first" ${atStart ? 'disabled' : ''} aria-label="First move">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.41 16.59L13.82 12l4.59-4.59L17 6l-6 6 6 6zM6 6h2v12H6z"/></svg>
+            </button>
+            <button class="history-btn" id="btn-prev" ${atStart ? 'disabled' : ''} aria-label="Previous move">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+            </button>
+            <span class="history-counter">${viewIndex} / ${totalMoves}</span>
+            <button class="history-btn" id="btn-next" ${atEnd ? 'disabled' : ''} aria-label="Next move">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+            </button>
+            <button class="history-btn" id="btn-last" ${atEnd ? 'disabled' : ''} aria-label="Last move">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5.59 7.41L10.18 12l-4.59 4.59L7 18l6-6-6-6zM16 6h2v12h-2z"/></svg>
+            </button>
+        </div>
+        ${undoButtonHtml}
+    `;
+    
+    // Add event listeners
+    document.getElementById('btn-first').onclick = goToFirstMove;
+    document.getElementById('btn-prev').onclick = goToPrevMove;
+    document.getElementById('btn-next').onclick = goToNextMove;
+    document.getElementById('btn-last').onclick = goToLastMove;
+    
+    const undoBtn = document.getElementById('btn-undo');
+    if (undoBtn) {
+        undoBtn.onclick = undoToCurrentPosition;
+    }
+}
+
 function createSketch() {
     return (p) => {
         p.setup = function() {
@@ -762,9 +998,10 @@ function createSketch() {
 
         p.mouseMoved = function() {
             if (board) {
-                // In scoring mode (not game over), hover over any stone; otherwise only if it's my turn
+                // In scoring mode (not game over) and viewing latest, hover over any stone
+                // Otherwise only if it's my turn (canMakeMove includes !isViewingHistory check)
                 let newHover;
-                if (inScoring && !gameOver) {
+                if (inScoring && !gameOver && !isViewingHistory) {
                     newHover = board.findHover(p.mouseX, p.mouseY, false);
                     // Only hover over actual stones, not empty intersections
                     if (newHover && newHover.color <= 0) newHover = null;
@@ -782,6 +1019,9 @@ function createSketch() {
 
         function handlePress(x, y) {
             if (!board || gameOver) return;
+            
+            // Don't allow any actions when viewing history
+            if (isViewingHistory) return;
             
             if (inScoring) {
                 // In scoring mode, toggle dead state of clicked chain
@@ -832,6 +1072,15 @@ function createSketch() {
                 console.log('currentMove:', board.currentMove);
                 console.log('seats:', seats);
                 console.log('mySeat:', mySeat);
+            }
+            
+            // Arrow key navigation for move history
+            if (p.keyCode === p.LEFT_ARROW) {
+                goToPrevMove();
+                return false; // Prevent default
+            } else if (p.keyCode === p.RIGHT_ARROW) {
+                goToNextMove();
+                return false; // Prevent default
             }
         };
     };
