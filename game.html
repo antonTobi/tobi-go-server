@@ -28,14 +28,27 @@
                 <polyline points="9 22 9 12 15 12 15 22"></polyline>
             </svg>
         </a>
+        
+        <!-- Portrait layout: player cards at top -->
+        <div id="top-bar">
+            <div id="top-player-cards"></div>
+        </div>
+        
         <div id="board-wrapper">
             <div id="board-container"></div>
-            <div id="history-controls"></div>
         </div>
-        <button id="sidebar-toggle" aria-label="Toggle sidebar">›</button>
+        
+        <!-- Bottom bar: history controls and game controls for portrait -->
+        <div id="bottom-bar">
+            <div id="history-controls"></div>
+            <div id="bottom-game-controls"></div>
+        </div>
+        
+        <!-- Sidebar for landscape layout -->
         <div id="players-sidebar">
             <h3>Players</h3>
             <div id="player-cards"></div>
+            <div id="sidebar-history-controls"></div>
             <div id="game-controls"></div>
         </div>
     </div>

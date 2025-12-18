@@ -46,44 +46,21 @@ window._debugHistory = () => ({ liveMoves, viewIndex, isViewingHistory, totalMov
 // Initialize game
 initGame();
 
-// Setup sidebar toggle
-function setupSidebarToggle() {
+// Setup UI event handlers
+function setupUIHandlers() {
+    // Prevent clicks/touches on sidebar and bottom bar from reaching the canvas
     const sidebar = document.getElementById('players-sidebar');
-    const toggleBtn = document.getElementById('sidebar-toggle');
-    const gameContainer = document.querySelector('.game-container');
+    const bottomBar = document.getElementById('bottom-bar');
+    const topBar = document.getElementById('top-bar');
     
-    if (toggleBtn && sidebar && gameContainer) {
-        // Toggle button handler - works for both click and touch
-        const toggleSidebar = (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            sidebar.classList.toggle('collapsed');
-            gameContainer.classList.toggle('sidebar-collapsed');
-        };
-        
-        toggleBtn.addEventListener('click', toggleSidebar);
-        toggleBtn.addEventListener('touchend', toggleSidebar, { passive: false });
-        
-        // Prevent toggle button touchstart from propagating but don't block the event
-        toggleBtn.addEventListener('touchstart', (e) => {
-            e.stopPropagation();
-        }, { passive: true });
-        
-        // Prevent clicks/touches on sidebar content from reaching the canvas
-        // But don't block events on elements inside the sidebar
-        sidebar.addEventListener('mousedown', (e) => {
-            e.stopPropagation();
-        });
-        sidebar.addEventListener('click', (e) => {
-            e.stopPropagation();
-        });
-        sidebar.addEventListener('touchstart', (e) => {
-            e.stopPropagation();
-        }, { passive: true });
-        sidebar.addEventListener('touchend', (e) => {
-            e.stopPropagation();
-        }, { passive: true });
-    }
+    [sidebar, bottomBar, topBar].forEach(el => {
+        if (el) {
+            el.addEventListener('mousedown', (e) => e.stopPropagation());
+            el.addEventListener('click', (e) => e.stopPropagation());
+            el.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+            el.addEventListener('touchend', (e) => e.stopPropagation(), { passive: true });
+        }
+    });
     
     // Setup home button for mobile
     const homeBtn = document.querySelector('.home-btn');
@@ -93,13 +70,38 @@ function setupSidebarToggle() {
             window.location.href = homeBtn.href;
         }, { passive: false });
     }
+    
+    // Listen for layout changes
+    const layoutMediaQuery = window.matchMedia('(min-aspect-ratio: 1/1)');
+    layoutMediaQuery.addEventListener('change', handleLayoutChange);
+    handleLayoutChange(layoutMediaQuery);
+}
+
+// Handle layout changes between portrait and landscape
+function handleLayoutChange(e) {
+    // Re-render UI for the current layout
+    renderPlayerCards();
+    renderGameControls();
+    renderHistoryControls();
+    
+    // Trigger window resize to recalculate board size
+    if (p5Instance) {
+        setTimeout(() => {
+            p5Instance.windowResized();
+        }, 100);
+    }
+}
+
+// Check if currently in landscape mode
+function isLandscapeMode() {
+    return window.matchMedia('(min-aspect-ratio: 1/1)').matches;
 }
 
 // Call setup when DOM is ready
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', setupSidebarToggle);
+    document.addEventListener('DOMContentLoaded', setupUIHandlers);
 } else {
-    setupSidebarToggle();
+    setupUIHandlers();
 }
 
 function initGame() {
@@ -367,7 +369,11 @@ function goToFirstMove() {
 }
 
 function goToPrevMove() {
-    if (viewIndex <= 0) return;
+    if (viewIndex <= 0) {
+        // Hit the boundary - stop any active holds
+        stopAllHolds();
+        return;
+    }
     viewIndex--;
     isViewingHistory = true;
     rebuildBoardToView();
@@ -377,11 +383,16 @@ function goToPrevMove() {
 }
 
 function goToNextMove() {
-    if (viewIndex >= liveMoves.length) return;
+    if (viewIndex >= liveMoves.length) {
+        // Hit the boundary - stop any active holds
+        stopAllHolds();
+        return;
+    }
     viewIndex++;
     // If we've reached the latest move, exit history mode
     if (viewIndex >= liveMoves.length) {
         isViewingHistory = false;
+        stopAllHolds(); // Stop holds when we reach the end
     }
     rebuildBoardToView();
     renderHistoryControls();
@@ -397,6 +408,101 @@ function goToLastMove() {
     renderHistoryControls();
     renderPlayerCards();
     if (p5Instance) p5Instance.redraw();
+}
+
+// Setup hold-to-repeat behavior for a button
+// Single click fires once, hold fires once then delays, then repeats quickly
+let mouseHoldState = null;
+
+function setupHoldToRepeat(button, action) {
+    const INITIAL_DELAY = 400; // ms before repeat starts
+    const REPEAT_INTERVAL = 50; // ms between repeats
+    
+    function startHold(e) {
+        e.preventDefault();
+        
+        // Clear any existing mouse hold state
+        stopMouseHold();
+        
+        // Fire once immediately
+        action();
+        
+        // Set up delayed repeat
+        mouseHoldState = {
+            timeoutId: setTimeout(() => {
+                // Start rapid repeat
+                if (mouseHoldState) {
+                    mouseHoldState.intervalId = setInterval(action, REPEAT_INTERVAL);
+                }
+            }, INITIAL_DELAY)
+        };
+    }
+    
+    function stopMouseHold() {
+        if (mouseHoldState) {
+            if (mouseHoldState.timeoutId) clearTimeout(mouseHoldState.timeoutId);
+            if (mouseHoldState.intervalId) clearInterval(mouseHoldState.intervalId);
+            mouseHoldState = null;
+        }
+    }
+    
+    // Mouse events
+    button.addEventListener('mousedown', startHold);
+    button.addEventListener('mouseup', stopMouseHold);
+    button.addEventListener('mouseleave', stopMouseHold);
+    
+    // Touch events
+    button.addEventListener('touchstart', startHold, { passive: false });
+    button.addEventListener('touchend', stopMouseHold);
+    button.addEventListener('touchcancel', stopMouseHold);
+}
+
+// Keyboard hold-to-repeat state (separate from mouse)
+let keyboardHoldState = {
+    leftArrow: null,
+    rightArrow: null
+};
+
+function startKeyboardHold(direction, action) {
+    const INITIAL_DELAY = 400;
+    const REPEAT_INTERVAL = 50;
+    
+    // Already holding this key
+    if (keyboardHoldState[direction]) return;
+    
+    // Fire once immediately
+    action();
+    
+    // Set up delayed repeat
+    keyboardHoldState[direction] = {
+        timeoutId: setTimeout(() => {
+            if (keyboardHoldState[direction]) {
+                keyboardHoldState[direction].intervalId = setInterval(action, REPEAT_INTERVAL);
+            }
+        }, INITIAL_DELAY)
+    };
+}
+
+function stopKeyboardHold(direction) {
+    const state = keyboardHoldState[direction];
+    if (state) {
+        if (state.timeoutId) clearTimeout(state.timeoutId);
+        if (state.intervalId) clearInterval(state.intervalId);
+        keyboardHoldState[direction] = null;
+    }
+}
+
+// Stop all hold-to-repeat states (called when hitting boundaries)
+function stopAllHolds() {
+    // Stop mouse hold
+    if (mouseHoldState) {
+        if (mouseHoldState.timeoutId) clearTimeout(mouseHoldState.timeoutId);
+        if (mouseHoldState.intervalId) clearInterval(mouseHoldState.intervalId);
+        mouseHoldState = null;
+    }
+    // Stop keyboard holds
+    stopKeyboardHold('leftArrow');
+    stopKeyboardHold('rightArrow');
 }
 
 function undoToCurrentPosition() {
@@ -665,56 +771,137 @@ const playerDisplayNames = {};
 // Track if player cards have been initialized
 let playerCardsInitialized = false;
 
-// Initialize player card elements once
+// Create a player card element
+function createPlayerCard(playerNum, containerId) {
+    const card = document.createElement('div');
+    card.className = 'player-card';
+    card.id = `${containerId}-card-${playerNum}`;
+    card.onclick = () => takeSeat(playerNum);
+    
+    // Stone icon
+    const stone = document.createElement('div');
+    stone.className = `player-stone color-${playerNum}`;
+    card.appendChild(stone);
+    
+    // Player info
+    const info = document.createElement('div');
+    info.className = 'player-info';
+    
+    const label = document.createElement('div');
+    label.className = 'player-label';
+    label.textContent = `Player ${playerNum}`;
+    info.appendChild(label);
+    
+    // Player name/status display (will be updated dynamically)
+    const nameDisplay = document.createElement('div');
+    nameDisplay.className = 'player-uid';
+    nameDisplay.id = `${containerId}-name-${playerNum}`;
+    info.appendChild(nameDisplay);
+    
+    // Score display (will be shown/hidden dynamically)
+    const scoreDisplay = document.createElement('div');
+    scoreDisplay.className = 'player-score';
+    scoreDisplay.id = `${containerId}-score-${playerNum}`;
+    info.appendChild(scoreDisplay);
+    
+    card.appendChild(info);
+    return card;
+}
+
+// Initialize player card elements in both containers
 function initPlayerCards() {
-    const container = document.getElementById('player-cards');
-    if (!container || playerCardsInitialized) return;
+    if (playerCardsInitialized) return;
     
-    container.innerHTML = '';
+    // Don't initialize until we know which seats are required
+    if (requiredSeats.length === 0) return;
     
-    requiredSeats.forEach(playerNum => {
-        const card = document.createElement('div');
-        card.className = 'player-card';
-        card.id = `player-card-${playerNum}`;
-        card.onclick = () => takeSeat(playerNum);
-        
-        // Stone icon
-        const stone = document.createElement('div');
-        stone.className = `player-stone color-${playerNum}`;
-        card.appendChild(stone);
-        
-        // Player info
-        const info = document.createElement('div');
-        info.className = 'player-info';
-        
-        const label = document.createElement('div');
-        label.className = 'player-label';
-        label.textContent = `Player ${playerNum}`;
-        info.appendChild(label);
-        
-        // Player name/status display (will be updated dynamically)
-        const nameDisplay = document.createElement('div');
-        nameDisplay.className = 'player-uid';
-        nameDisplay.id = `player-name-${playerNum}`;
-        info.appendChild(nameDisplay);
-        
-        // Score display (will be shown/hidden dynamically)
-        const scoreDisplay = document.createElement('div');
-        scoreDisplay.className = 'player-score';
-        scoreDisplay.id = `player-score-${playerNum}`;
-        info.appendChild(scoreDisplay);
-        
-        card.appendChild(info);
-        container.appendChild(card);
-    });
+    const sidebarContainer = document.getElementById('player-cards');
+    const topContainer = document.getElementById('top-player-cards');
+    
+    if (sidebarContainer) {
+        sidebarContainer.innerHTML = '';
+        requiredSeats.forEach(playerNum => {
+            sidebarContainer.appendChild(createPlayerCard(playerNum, 'sidebar'));
+        });
+    }
+    
+    if (topContainer) {
+        topContainer.innerHTML = '';
+        requiredSeats.forEach(playerNum => {
+            topContainer.appendChild(createPlayerCard(playerNum, 'top'));
+        });
+    }
     
     playerCardsInitialized = true;
 }
 
-async function renderPlayerCards() {
-    const container = document.getElementById('player-cards');
-    if (!container) return;
+// Update a single player card (works for both containers)
+function updatePlayerCard(playerNum, prefix, scores) {
+    const odIndex = seats[playerNum];
+    const isOccupied = !!odIndex;
+    const isMe = currentUser && odIndex === currentUser.uid;
+    const isCurrentTurn = board && board.currentMove.player === playerNum;
     
+    const card = document.getElementById(`${prefix}-card-${playerNum}`);
+    if (!card) return;
+    
+    // Update card classes
+    card.className = 'player-card';
+    if (isCurrentTurn && !inScoring) card.classList.add('current-turn');
+    if (isMe) card.classList.add('my-seat');
+    if (isOccupied && !isMe) {
+        card.classList.add('occupied');
+    } else {
+        card.classList.add('empty');
+    }
+    
+    // Update name display
+    const nameDisplay = document.getElementById(`${prefix}-name-${playerNum}`);
+    if (nameDisplay) {
+        if (isOccupied) {
+            nameDisplay.className = 'player-uid';
+            if (isMe) {
+                nameDisplay.textContent = 'You';
+            } else {
+                const displayName = playerDisplayNames[odIndex];
+                nameDisplay.textContent = displayName || odIndex.substring(0, 12) + '...';
+            }
+        } else {
+            nameDisplay.className = 'player-empty';
+            nameDisplay.textContent = 'Click to join';
+        }
+    }
+    
+    // Update score display
+    const scoreDisplay = document.getElementById(`${prefix}-score-${playerNum}`);
+    if (scoreDisplay) {
+        const viewingFinalPosition = viewIndex >= liveMoves.length;
+        const shouldShowScores = (inScoring || gameOver) && viewingFinalPosition;
+        
+        if (shouldShowScores) {
+            const score = scores[playerNum] || 0;
+            const scoreText = `Score: ${score}`;
+            
+            if (gameOver) {
+                const isWinner = scores.maxScore > 0 && score === scores.maxScore;
+                scoreDisplay.innerHTML = isWinner ? `🏆 ${scoreText}` : scoreText;
+                scoreDisplay.className = 'player-score' + (isWinner ? ' winner' : '');
+            } else {
+                const hasAccepted = acceptedScores[playerNum] === true;
+                scoreDisplay.textContent = hasAccepted ? `${scoreText} ✓` : scoreText;
+                scoreDisplay.className = 'player-score' + (hasAccepted ? ' accepted' : '');
+            }
+            scoreDisplay.style.visibility = 'visible';
+        } else {
+            // Use placeholder text and visibility:hidden to maintain consistent card size
+            scoreDisplay.textContent = 'Score: 00';
+            scoreDisplay.className = 'player-score';
+            scoreDisplay.style.visibility = 'hidden';
+        }
+    }
+}
+
+async function renderPlayerCards() {
     // Initialize cards if not already done
     if (!playerCardsInitialized) {
         initPlayerCards();
@@ -732,103 +919,27 @@ async function renderPlayerCards() {
                 getDisplayName(odIndex).then(name => {
                     if (name) {
                         playerDisplayNames[odIndex] = name;
-                        // Update just this player's name display after fetching
-                        updatePlayerName(playerNum, odIndex);
+                        // Update both containers after fetching
+                        updatePlayerCard(playerNum, 'sidebar', scores);
+                        updatePlayerCard(playerNum, 'top', scores);
                     }
                 })
             );
         }
     });
     
-    // Update all cards immediately with current data
+    // Update all cards in both containers
     requiredSeats.forEach(playerNum => {
-        const odIndex = seats[playerNum];
-        const isOccupied = !!odIndex;
-        const isMe = currentUser && odIndex === currentUser.uid;
-        const isCurrentTurn = board && board.currentMove.player === playerNum;
-        
-        const card = document.getElementById(`player-card-${playerNum}`);
-        if (!card) return;
-        
-        // Update card classes
-        card.className = 'player-card';
-        if (isCurrentTurn && !inScoring) card.classList.add('current-turn');
-        if (isMe) card.classList.add('my-seat');
-        if (isOccupied && !isMe) {
-            card.classList.add('occupied');
-        } else {
-            card.classList.add('empty');
-        }
-        
-        // Update name display
-        const nameDisplay = document.getElementById(`player-name-${playerNum}`);
-        if (nameDisplay) {
-            if (isOccupied) {
-                nameDisplay.className = 'player-uid';
-                if (isMe) {
-                    nameDisplay.textContent = 'You';
-                } else {
-                    // Use display name if available, otherwise truncated UID
-                    const displayName = playerDisplayNames[odIndex];
-                    nameDisplay.textContent = displayName || odIndex.substring(0, 12) + '...';
-                }
-            } else {
-                nameDisplay.className = 'player-empty';
-                nameDisplay.textContent = 'Click to join';
-            }
-        }
-        
-        // Update score display
-        const scoreDisplay = document.getElementById(`player-score-${playerNum}`);
-        if (scoreDisplay) {
-            // Only show scores when viewing the final position (not in history)
-            const viewingFinalPosition = viewIndex >= liveMoves.length;
-            const shouldShowScores = (inScoring || gameOver) && viewingFinalPosition;
-            
-            if (shouldShowScores) {
-                const score = scores[playerNum] || 0;
-                const scoreText = `Score: ${score}`;
-                
-                if (gameOver) {
-                    // Game is over - show trophy for winner(s), no checkmarks
-                    const isWinner = scores.maxScore > 0 && score === scores.maxScore;
-                    scoreDisplay.innerHTML = isWinner ? `🏆 ${scoreText}` : scoreText;
-                    scoreDisplay.className = 'player-score' + (isWinner ? ' winner' : '');
-                } else {
-                    // Still in scoring mode - show checkmarks for accepted
-                    const hasAccepted = acceptedScores[playerNum] === true;
-                    scoreDisplay.textContent = hasAccepted ? `${scoreText} ✓` : scoreText;
-                    scoreDisplay.className = 'player-score' + (hasAccepted ? ' accepted' : '');
-                }
-                scoreDisplay.style.display = '';
-            } else {
-                scoreDisplay.textContent = '';
-                scoreDisplay.style.display = 'none';
-            }
-        }
+        updatePlayerCard(playerNum, 'sidebar', scores);
+        updatePlayerCard(playerNum, 'top', scores);
     });
     
-    // Wait for name fetches to complete (updates happen via callback above)
+    // Wait for name fetches to complete
     await Promise.all(namePromises);
 }
 
-// Helper to update just a player's name (called after async name fetch)
-function updatePlayerName(playerNum, odIndex) {
-    const isMe = currentUser && odIndex === currentUser.uid;
-    const nameDisplay = document.getElementById(`player-name-${playerNum}`);
-    if (nameDisplay && odIndex) {
-        nameDisplay.className = 'player-uid';
-        if (isMe) {
-            nameDisplay.textContent = 'You';
-        } else {
-            const displayName = playerDisplayNames[odIndex];
-            nameDisplay.textContent = displayName || odIndex.substring(0, 12) + '...';
-        }
-    }
-}
-
-function renderGameControls() {
-    const container = document.getElementById('game-controls');
+// Populate a game controls container with the appropriate buttons/status
+function populateGameControls(container) {
     if (!container) return;
     
     container.innerHTML = '';
@@ -894,10 +1005,14 @@ function renderGameControls() {
     }
 }
 
+function renderGameControls() {
+    // Render to sidebar container
+    populateGameControls(document.getElementById('game-controls'));
+    // Render to bottom bar container
+    populateGameControls(document.getElementById('bottom-game-controls'));
+}
+
 function renderHistoryControls() {
-    const container = document.getElementById('history-controls');
-    if (!container) return;
-    
     const totalMoves = liveMoves.length;
     const atStart = viewIndex === 0;
     const atEnd = viewIndex >= totalMoves;
@@ -908,42 +1023,51 @@ function renderHistoryControls() {
     let undoButtonHtml = '';
     if (canUndo) {
         undoButtonHtml = `
-            <button class="undo-btn" id="btn-undo" aria-label="Undo to here">
+            <button class="undo-btn btn-undo" aria-label="Undo to here">
                 <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg>
                 Undo to here
             </button>
         `;
     }
     
-    container.innerHTML = `
+    const historyHtml = `
         <div class="history-nav">
-            <button class="history-btn" id="btn-first" ${atStart ? 'disabled' : ''} aria-label="First move">
+            <button class="history-btn btn-first" ${atStart ? 'disabled' : ''} aria-label="First move">
                 <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.41 16.59L13.82 12l4.59-4.59L17 6l-6 6 6 6zM6 6h2v12H6z"/></svg>
             </button>
-            <button class="history-btn" id="btn-prev" ${atStart ? 'disabled' : ''} aria-label="Previous move">
+            <button class="history-btn btn-prev" ${atStart ? 'disabled' : ''} aria-label="Previous move">
                 <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
             </button>
             <span class="history-counter">${viewIndex} / ${totalMoves}</span>
-            <button class="history-btn" id="btn-next" ${atEnd ? 'disabled' : ''} aria-label="Next move">
+            <button class="history-btn btn-next" ${atEnd ? 'disabled' : ''} aria-label="Next move">
                 <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
             </button>
-            <button class="history-btn" id="btn-last" ${atEnd ? 'disabled' : ''} aria-label="Last move">
+            <button class="history-btn btn-last" ${atEnd ? 'disabled' : ''} aria-label="Last move">
                 <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5.59 7.41L10.18 12l-4.59 4.59L7 18l6-6-6-6zM16 6h2v12h-2z"/></svg>
             </button>
         </div>
         ${undoButtonHtml}
     `;
     
-    // Add event listeners
-    document.getElementById('btn-first').onclick = goToFirstMove;
-    document.getElementById('btn-prev').onclick = goToPrevMove;
-    document.getElementById('btn-next').onclick = goToNextMove;
-    document.getElementById('btn-last').onclick = goToLastMove;
+    // Render to both containers
+    const bottomContainer = document.getElementById('history-controls');
+    const sidebarContainer = document.getElementById('sidebar-history-controls');
     
-    const undoBtn = document.getElementById('btn-undo');
-    if (undoBtn) {
-        undoBtn.onclick = undoToCurrentPosition;
-    }
+    if (bottomContainer) bottomContainer.innerHTML = historyHtml;
+    if (sidebarContainer) sidebarContainer.innerHTML = historyHtml;
+    
+    // Add event listeners to all buttons (using class selectors)
+    document.querySelectorAll('.btn-first').forEach(btn => btn.onclick = goToFirstMove);
+    document.querySelectorAll('.btn-last').forEach(btn => btn.onclick = goToLastMove);
+    document.querySelectorAll('.btn-undo').forEach(btn => btn.onclick = undoToCurrentPosition);
+    
+    // Add hold-to-repeat for prev/next buttons
+    document.querySelectorAll('.btn-prev').forEach(btn => {
+        setupHoldToRepeat(btn, goToPrevMove);
+    });
+    document.querySelectorAll('.btn-next').forEach(btn => {
+        setupHoldToRepeat(btn, goToNextMove);
+    });
 }
 
 function createSketch() {
@@ -1074,13 +1198,23 @@ function createSketch() {
                 console.log('mySeat:', mySeat);
             }
             
-            // Arrow key navigation for move history
+            // Arrow key navigation for move history with hold-to-repeat
             if (p.keyCode === p.LEFT_ARROW) {
-                goToPrevMove();
+                startKeyboardHold('leftArrow', goToPrevMove);
                 return false; // Prevent default
             } else if (p.keyCode === p.RIGHT_ARROW) {
-                goToNextMove();
+                startKeyboardHold('rightArrow', goToNextMove);
                 return false; // Prevent default
+            }
+        };
+        
+        p.keyReleased = function() {
+            if (p.keyCode === p.LEFT_ARROW) {
+                stopKeyboardHold('leftArrow');
+                return false;
+            } else if (p.keyCode === p.RIGHT_ARROW) {
+                stopKeyboardHold('rightArrow');
+                return false;
             }
         };
     };
