@@ -162,18 +162,38 @@ body {
     align-items: center;
     gap: 8px;
     padding: 10px 16px;
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
     z-index: 90;
+    width: 100%;
 }
 
+/* History controls row - always centered */
+#history-controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+/* Action row - centered, fixed height to prevent layout shift */
 #bottom-game-controls {
     display: flex;
     gap: 10px;
     flex-wrap: wrap;
     justify-content: center;
+    align-items: center;
+    min-height: 36px; /* Prevent layout shift when content changes */
 }
 
 #bottom-game-controls:empty {
-    display: none;
+    min-height: 0;
+}
+
+/* Scoring buttons container */
+.scoring-buttons {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    align-items: center;
 }
 
 #bottom-game-controls .game-status {

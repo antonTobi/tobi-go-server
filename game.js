@@ -135,8 +135,7 @@ function initGame() {
             
             // Render initial UI
             renderPlayerCards();
-            renderGameControls();
-            renderHistoryControls();
+            renderHistoryControls(); // This also calls renderGameControls()
 
             // Listen for seat changes
             seatsRef.on('value', handleSeatsChanged);
@@ -939,12 +938,18 @@ async function renderPlayerCards() {
 }
 
 // Populate a game controls container with the appropriate buttons/status
+// Only one of these is shown at a time (priority order):
+// 1. Game Over message
+// 2. Start Game button (host only)
+// 3. Waiting for host message
+// 4. Scoring mode UI (accept/reject buttons)
+// 5. Undo to here button (when viewing history)
+// 6. Go to Scoring button (when it's your turn)
 function populateGameControls(container) {
     if (!container) return;
     
     container.innerHTML = '';
     
-    // Show start button only to host and only if game hasn't started
     if (gameOver) {
         // Game over - show final status
         const status = document.createElement('div');
@@ -963,11 +968,9 @@ function populateGameControls(container) {
         status.textContent = 'Waiting for host to start...';
         container.appendChild(status);
     } else if (inScoring) {
-        // Scoring mode UI
-        const status = document.createElement('div');
-        status.className = 'game-status';
-        status.textContent = 'Scoring: Click groups to mark dead';
-        container.appendChild(status);
+        // Scoring mode UI - accept and back buttons side by side
+        const btnContainer = document.createElement('div');
+        btnContainer.className = 'scoring-buttons';
         
         // Accept score button (only if seated)
         if (mySeat !== null) {
@@ -975,33 +978,42 @@ function populateGameControls(container) {
             
             const acceptBtn = document.createElement('button');
             acceptBtn.className = 'btn-primary accept-score-btn';
-            acceptBtn.textContent = hasAccepted ? 'Score Accepted ✓' : 'Accept Score';
+            acceptBtn.textContent = hasAccepted ? 'Accepted ✓' : 'Accept Score';
             acceptBtn.disabled = hasAccepted || acceptCooldown;
             if (!hasAccepted && !acceptCooldown) {
                 acceptBtn.onclick = acceptScore;
             }
-            container.appendChild(acceptBtn);
+            btnContainer.appendChild(acceptBtn);
         }
         
         const exitBtn = document.createElement('button');
         exitBtn.className = 'btn-secondary exit-scoring-btn';
         exitBtn.textContent = 'Back to Game';
         exitBtn.onclick = exitScoring;
-        container.appendChild(exitBtn);
-    } else {
-        // Game in progress - show scoring button for current player
-        const status = document.createElement('div');
-        status.className = 'game-status';
-        status.textContent = 'Game in progress';
-        container.appendChild(status);
+        btnContainer.appendChild(exitBtn);
         
-        if (canMakeMove()) {
+        container.appendChild(btnContainer);
+    } else {
+        // Game in progress
+        // Check if we should show Undo button (viewing history)
+        const atEnd = viewIndex >= liveMoves.length;
+        const canUndo = mySeat !== null && isViewingHistory && !atEnd && gameStarted;
+        
+        if (canUndo) {
+            const undoBtn = document.createElement('button');
+            undoBtn.className = 'undo-btn';
+            undoBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg> Undo to here`;
+            undoBtn.onclick = undoToCurrentPosition;
+            container.appendChild(undoBtn);
+        } else if (canMakeMove()) {
+            // Show scoring button when it's your turn and viewing current position
             const scoringBtn = document.createElement('button');
             scoringBtn.className = 'btn-secondary enter-scoring-btn';
             scoringBtn.textContent = 'Go to Scoring';
             scoringBtn.onclick = enterScoring;
             container.appendChild(scoringBtn);
         }
+        // If neither condition is met, container stays empty (which is fine)
     }
 }
 
@@ -1016,19 +1028,6 @@ function renderHistoryControls() {
     const totalMoves = liveMoves.length;
     const atStart = viewIndex === 0;
     const atEnd = viewIndex >= totalMoves;
-    
-    // Show undo button if: player is seated, viewing history (not at end), game not over, and game has started
-    const canUndo = mySeat !== null && isViewingHistory && !atEnd && !gameOver && gameStarted;
-    
-    let undoButtonHtml = '';
-    if (canUndo) {
-        undoButtonHtml = `
-            <button class="undo-btn btn-undo" aria-label="Undo to here">
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg>
-                Undo to here
-            </button>
-        `;
-    }
     
     const historyHtml = `
         <div class="history-nav">
@@ -1046,7 +1045,6 @@ function renderHistoryControls() {
                 <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5.59 7.41L10.18 12l-4.59 4.59L7 18l6-6-6-6zM16 6h2v12h-2z"/></svg>
             </button>
         </div>
-        ${undoButtonHtml}
     `;
     
     // Render to both containers
@@ -1059,7 +1057,6 @@ function renderHistoryControls() {
     // Add event listeners to all buttons (using class selectors)
     document.querySelectorAll('.btn-first').forEach(btn => btn.onclick = goToFirstMove);
     document.querySelectorAll('.btn-last').forEach(btn => btn.onclick = goToLastMove);
-    document.querySelectorAll('.btn-undo').forEach(btn => btn.onclick = undoToCurrentPosition);
     
     // Add hold-to-repeat for prev/next buttons
     document.querySelectorAll('.btn-prev').forEach(btn => {
@@ -1068,6 +1065,9 @@ function renderHistoryControls() {
     document.querySelectorAll('.btn-next').forEach(btn => {
         setupHoldToRepeat(btn, goToNextMove);
     });
+    
+    // Also update game controls since undo button state may have changed
+    renderGameControls();
 }
 
 function createSketch() {
