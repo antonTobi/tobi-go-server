@@ -7,7 +7,20 @@ let pregameSequence = '';
 let turnCycle = '101,202';
 let selectedColor = 1; // Default to black
 let hoverNode = null;
-let p = null;
+let hoverPickerColor = null;
+let boardP5 = null;
+let pickerP5 = null;
+
+// Drag state for placing multiple stones
+let isDragging = false;
+let dragFromColor = null; // The original color being changed from
+let dragToColor = null; // The color being changed to
+
+// Stone picker configuration
+const pickerColors = [-1, 1, 2, 3, 4, 5]; // Delete, Black, White, Red, Yellow, Cobalt
+const pickerStoneSize = 40;
+const pickerPadding = 10;
+const pickerSelectionBorder = 4;
 
 // Board type configuration
 const boardTypeConfig = {
@@ -21,6 +34,11 @@ const boardTypeConfig = {
 initSetupPage();
 
 function initSetupPage() {
+    // Setup tab buttons
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+    });
+    
     // Setup form listeners
     document.getElementById('board-type').addEventListener('change', onBoardTypeChange);
     document.getElementById('board-size').addEventListener('input', validateAndUpdateBoardSize);
@@ -32,20 +50,9 @@ function initSetupPage() {
     document.getElementById('size-decrement').addEventListener('click', () => adjustBoardSize(-1));
     document.getElementById('size-increment').addEventListener('click', () => adjustBoardSize(1));
     
-    // Setup stone color toolbar
-    document.querySelectorAll('.stone-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('.stone-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            selectedColor = parseInt(btn.dataset.color);
-        });
-    });
-    
-    // Set default active button
-    document.querySelector('.stone-btn[data-color="1"]').classList.add('active');
-    
-    // Initialize p5 sketch
-    initSketch();
+    // Initialize p5 sketches
+    initBoardSketch();
+    initPickerSketch();
     
     // Sync JS state with actual form values (browser may restore previous values)
     boardType = document.getElementById('board-type').value;
@@ -54,16 +61,169 @@ function initSetupPage() {
     validateBoardSize();
     updateSpinnerState();
     updatePreview();
+    
+    // Handle window resize for responsive layout
+    window.addEventListener('resize', handleResize);
+    
+    // Call resize multiple times during page load to catch layout shifts
+    // First call immediately
+    handleResize();
+    // Second call after rAF (after first paint)
+    requestAnimationFrame(() => {
+        handleResize();
+        // Third call after another rAF (after styles/layout stabilize)
+        requestAnimationFrame(() => {
+            handleResize();
+        });
+    });
 }
 
-function initSketch() {
+function switchTab(tabName) {
+    // Update tab buttons
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === tabName);
+    });
+    
+    // Update panels
+    document.querySelectorAll('.setup-panel').forEach(panel => {
+        panel.classList.toggle('active', panel.dataset.panel === tabName);
+    });
+    
+    // Redraw canvases when switching to board tab
+    if (tabName === 'board') {
+        // Use requestAnimationFrame to ensure layout is complete before resizing
+        requestAnimationFrame(() => {
+            handleResize();
+        });
+    }
+}
+
+function handleResize() {
+    const container = document.getElementById('preview-container');
+    if (!container || !boardP5) return;
+    
+    // Get the container's available space
+    const rect = container.getBoundingClientRect();
+    
+    // Board should be square - use the smaller dimension
+    // but limit to a reasonable maximum
+    const maxSize = 600;
+    const size = Math.min(rect.width, rect.height, maxSize);
+    
+    if (size > 50) {
+        boardP5.resizeCanvas(size, size);
+        if (previewBoard) {
+            previewBoard.calculateTransform(size, size);
+            boardP5.redraw();
+        }
+    }
+}
+
+function initBoardSketch() {
     const sketch = (p) => {
+        let canvas;
+        
         p.setup = () => {
-            // p.pixelDensity(1); // Ensure 1:1 canvas pixels to screen pixels for crisp lines
-            let canvas = p.createCanvas(600, 600);
+            const container = document.getElementById('preview-container');
+            const size = Math.min(container.offsetWidth || 400, container.offsetHeight || 400);
+            canvas = p.createCanvas(size, size);
             canvas.parent('preview-container');
             p.noLoop();
+            
+            // Attach mouse/touch events directly to the canvas element
+            // This ensures events only fire when the canvas itself is clicked
+            canvas.mousePressed(handleMousePressed);
+            canvas.mouseReleased(handleMouseReleased);
+            canvas.mouseMoved(handleMouseMoved);
+            canvas.touchStarted(handleTouchStarted);
+            canvas.touchMoved(handleTouchMoved);
+            canvas.touchEnded(handleTouchEnded);
         };
+        
+        function handleMousePressed() {
+            if (previewBoard && hoverNode) {
+                // Record original color for drag operation
+                dragFromColor = hoverNode.color;
+                
+                // Determine target color: if clicking on stone of same color as selected, remove it
+                if (hoverNode.color === selectedColor) {
+                    dragToColor = 0; // Remove (set to empty)
+                } else {
+                    dragToColor = selectedColor; // Add selected color
+                }
+                
+                // Apply the initial change
+                hoverNode.color = dragToColor;
+                isDragging = true;
+                p.redraw();
+            }
+        }
+        
+        function handleMouseReleased() {
+            isDragging = false;
+            dragFromColor = null;
+            dragToColor = null;
+        }
+        
+        function handleMouseMoved() {
+            if (previewBoard) {
+                let newHover = previewBoard.findHover(p.mouseX, p.mouseY, false);
+                
+                if (hoverNode !== newHover) {
+                    hoverNode = newHover;
+                    p.redraw();
+                }
+            }
+        }
+        
+        function handleTouchStarted() {
+            if (p.touches.length > 0) {
+                const touch = p.touches[0];
+                
+                if (previewBoard) {
+                    let touchNode = previewBoard.findHover(touch.x, touch.y, false);
+                    if (touchNode) {
+                        hoverNode = touchNode;
+                        // Record original color for drag operation
+                        dragFromColor = touchNode.color;
+                        
+                        // Determine target color: if touching stone of same color as selected, remove it
+                        if (touchNode.color === selectedColor) {
+                            dragToColor = 0; // Remove (set to empty)
+                        } else {
+                            dragToColor = selectedColor; // Add selected color
+                        }
+                        
+                        // Apply the initial change
+                        touchNode.color = dragToColor;
+                        isDragging = true;
+                        p.redraw();
+                    }
+                }
+                return false; // Prevent default
+            }
+        }
+        
+        function handleTouchMoved() {
+            if (p.touches.length > 0) {
+                const touch = p.touches[0];
+                if (!isDragging || !previewBoard) return false;
+                
+                let newHover = previewBoard.findHover(touch.x, touch.y, false);
+                if (newHover && newHover !== hoverNode) {
+                    hoverNode = newHover;
+                    applyDragToNode(newHover);
+                    p.redraw();
+                }
+                return false; // Prevent default
+            }
+        }
+        
+        function handleTouchEnded() {
+            isDragging = false;
+            dragFromColor = null;
+            dragToColor = null;
+        }
 
         p.draw = () => {
             p.background(255, 193, 140);
@@ -78,43 +238,133 @@ function initSketch() {
                 }
             }
         };
-
-        p.mouseMoved = () => {
-            if (previewBoard) {
-                let newHover = previewBoard.findHover(p.mouseX, p.mouseY, false);
-                
-                if (hoverNode !== newHover) {
-                    hoverNode = newHover;
-                    p.redraw();
-                }
-            }
-        };
-
-        p.mousePressed = () => {
-            if (previewBoard && hoverNode) {
-                // Toggle stone: if same color, remove; otherwise set to selected color
-                if (hoverNode.color === selectedColor) {
-                    hoverNode.color = 0;
-                } else {
-                    hoverNode.color = selectedColor;
-                }
+        
+        // Keep mouseDragged as a p5 method since it needs to track dragging
+        p.mouseDragged = () => {
+            if (!isDragging || !previewBoard) return;
+            
+            let newHover = previewBoard.findHover(p.mouseX, p.mouseY, false);
+            if (newHover && newHover !== hoverNode) {
+                hoverNode = newHover;
+                applyDragToNode(newHover);
                 p.redraw();
             }
         };
 
         p.windowResized = () => {
-            let container = document.getElementById('preview-container');
-            if (container) {
-                p.resizeCanvas(container.offsetWidth, container.offsetWidth);
-                if (previewBoard) {
-                    previewBoard.calculateTransform(p.width, p.height);
-                    p.redraw();
+            handleResize();
+        };
+    };
+    
+    boardP5 = new p5(sketch);
+}
+
+function applyDragToNode(node) {
+    if (!node || dragFromColor === null) return;
+    
+    // Only change nodes that have the same color as the first clicked node
+    if (node.color === dragFromColor) {
+        node.color = dragToColor;
+    }
+}
+
+function initPickerSketch() {
+    const sketch = (p) => {
+        p.setup = () => {
+            const totalWidth = pickerColors.length * (pickerStoneSize + pickerPadding * 2);
+            const height = pickerStoneSize + pickerPadding * 2;
+            let canvas = p.createCanvas(totalWidth, height);
+            canvas.parent('stone-picker-container');
+            p.noLoop();
+        };
+
+        p.draw = () => {
+            p.background(245);
+            
+            for (let i = 0; i < pickerColors.length; i++) {
+                const color = pickerColors[i];
+                const x = i * (pickerStoneSize + pickerPadding * 2) + pickerStoneSize / 2 + pickerPadding;
+                const y = p.height / 2;
+                
+                // Draw selection indicator
+                if (color === selectedColor) {
+                    p.noFill();
+                    p.stroke(102, 126, 234); // #667eea
+                    p.strokeWeight(pickerSelectionBorder);
+                    p.circle(x, y, pickerStoneSize + pickerSelectionBorder);
                 }
+                
+                // Draw hover highlight
+                if (hoverPickerColor === color && color !== selectedColor) {
+                    p.noFill();
+                    p.stroke(180, 180, 200);
+                    p.strokeWeight(2);
+                    p.circle(x, y, pickerStoneSize + 4);
+                }
+                
+                // Draw the stone or delete icon
+                if (color === -1) {
+                    // Draw delete "X" icon
+                    p.fill(255);
+                    p.stroke(200);
+                    p.strokeWeight(2);
+                    p.circle(x, y, pickerStoneSize - 4);
+                    
+                    // Draw X
+                    p.stroke(100);
+                    p.strokeWeight(3);
+                    const offset = pickerStoneSize / 5;
+                    p.line(x - offset, y - offset, x + offset, y + offset);
+                    p.line(x - offset, y + offset, x + offset, y - offset);
+                } else if (color >= 1 && color <= 5) {
+                    // Draw stone using board.js colors
+                    p.fill(...stoneColors[color]);
+                    p.stroke(...strokeColors[color]);
+                    p.strokeWeight(2);
+                    p.circle(x, y, pickerStoneSize - 4);
+                }
+            }
+        };
+
+        p.mouseMoved = () => {
+            const newHover = getHoverPickerColor(p.mouseX, p.mouseY, p.height);
+            if (newHover !== hoverPickerColor) {
+                hoverPickerColor = newHover;
+                p.redraw();
+            }
+        };
+        
+        p.mouseOut = () => {
+            if (hoverPickerColor !== null) {
+                hoverPickerColor = null;
+                p.redraw();
+            }
+        };
+
+        p.mousePressed = () => {
+            const clicked = getHoverPickerColor(p.mouseX, p.mouseY, p.height);
+            if (clicked !== null) {
+                selectedColor = clicked;
+                p.redraw();
             }
         };
     };
     
-    p = new p5(sketch);
+    pickerP5 = new p5(sketch);
+}
+
+function getHoverPickerColor(mouseX, mouseY, canvasHeight) {
+    const height = canvasHeight || (pickerStoneSize + pickerPadding * 2);
+    
+    for (let i = 0; i < pickerColors.length; i++) {
+        const x = i * (pickerStoneSize + pickerPadding * 2) + pickerStoneSize / 2 + pickerPadding;
+        const y = height / 2;
+        const dist = Math.sqrt((mouseX - x) ** 2 + (mouseY - y) ** 2);
+        if (dist < pickerStoneSize / 2) {
+            return pickerColors[i];
+        }
+    }
+    return null;
 }
 
 function onBoardTypeChange() {
@@ -140,8 +390,8 @@ function updatePreview() {
         boardHeight
     });
     
-    if (p) {
-        p.redraw();
+    if (boardP5) {
+        boardP5.redraw();
     }
 }
 

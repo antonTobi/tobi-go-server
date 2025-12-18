@@ -375,8 +375,9 @@ function createThumbnail(container, game) {
         let territory = null;
         
         p.setup = () => {
-            p.pixelDensity(1); // Ensure 1:1 canvas pixels to screen pixels for crisp lines
-            p.createCanvas(200, 200);
+            const container = p._userNode;
+            const size = Math.min(container.clientWidth, container.clientHeight) || 200;
+            p.createCanvas(size, size);
             p.noLoop();
             
             // Initialize board from game settings

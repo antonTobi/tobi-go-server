@@ -27,6 +27,7 @@ let canonicalIndexMap = null; // { nodeIndex: canonicalIndex } - computed when e
 let territory = null;      // { nodeIndex: ownerColor } - computed when deadChains changes
 let acceptedScores = {};   // { playerNumber: true } - players who accepted the current score
 let gameOver = false;      // Whether the game has ended
+let gameLoaded = false;    // Whether the initial game data has been loaded
 let acceptCooldown = false; // Prevents accepting immediately after a chain toggle
 let seats = {};         // { playerNumber: odIndex }
 let mySeat = null;       // The player number I'm sitting in (1-5), or null
@@ -126,6 +127,7 @@ function initGame() {
             gameOver = gameData.gameOver || false;
             deadChains = gameData.deadChains || {};
             acceptedScores = gameData.acceptedScores || {};
+            gameLoaded = true;
 
             // Determine required seats from turnCycle
             requiredSeats = getRequiredSeats(gameSettings.turnCycle);
@@ -962,6 +964,11 @@ function populateGameControls(container) {
         startBtn.textContent = 'Start Game';
         startBtn.onclick = startGame;
         container.appendChild(startBtn);
+    } else if (!gameLoaded) {
+        const status = document.createElement('div');
+        status.className = 'game-status';
+        status.textContent = 'Loading game...';
+        container.appendChild(status);
     } else if (!gameStarted) {
         const status = document.createElement('div');
         status.className = 'game-status';

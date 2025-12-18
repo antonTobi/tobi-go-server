@@ -14,34 +14,55 @@
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
 </head>
-<body>
-    <div class="setup-container">
-        <div class="setup-sidebar">
+<body class="setup-body">
+    <div class="setup-page">
+        <header class="setup-header">
             <a href="/" class="back-link">← Back to Home</a>
             <h1>New Game</h1>
-            
-            <form id="game-setup-form">
-                <div class="form-group">
-                    <label for="board-type">Board Type</label>
-                    <select id="board-type" name="boardType">
-                        <option value="grid">Grid</option>
-                        <option value="star">Star</option>
-                        <option value="dodecagon">Dodecagon</option>
-                        <option value="rotatedGrid">Rotated Grid</option>
-                        <option value="hexagon">Hexagon</option>
-                    </select>
+        </header>
+        
+        <div class="setup-tabs" id="setup-tabs">
+            <button type="button" class="tab-btn active" data-tab="board">Board</button>
+            <button type="button" class="tab-btn" data-tab="settings">Settings</button>
+        </div>
+        
+        <div class="setup-content">
+            <!-- Board Panel (Tab 1 on mobile, left side on desktop) -->
+            <div class="setup-panel board-panel active" data-panel="board">
+                <div class="board-controls">
+                    <div class="board-controls-row">
+                        <div class="form-group">
+                            <label for="board-type">Board Type</label>
+                            <select id="board-type" name="boardType">
+                                <option value="grid">Grid</option>
+                                <option value="star">Star</option>
+                                <option value="dodecagon">Dodecagon</option>
+                                <option value="rotatedGrid">Rotated Grid</option>
+                                <option value="hexagon">Hexagon</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="board-size">Board Size</label>
+                            <div class="input-with-spinner">
+                                <button type="button" id="size-decrement" class="spinner-btn">−</button>
+                                <input type="text" id="board-size" name="boardSize" value="9" placeholder="e.g. 19 or 19x13">
+                                <button type="button" id="size-increment" class="spinner-btn">+</button>
+                            </div>
+                            <span id="board-size-error" class="error-message"></span>
+                        </div>
+                    </div>
                 </div>
                 
-                <div class="form-group">
-                    <label for="board-size">Board Size</label>
-                    <div class="input-with-spinner">
-                        <button type="button" id="size-decrement" class="spinner-btn">−</button>
-                        <input type="text" id="board-size" name="boardSize" value="9" placeholder="e.g. 19 or 19x13">
-                        <button type="button" id="size-increment" class="spinner-btn">+</button>
-                    </div>
-                    <span id="board-size-error" class="error-message"></span>
-                </div>
-
+                <div id="preview-container"></div>
+                
+                <div id="stone-picker-container"></div>
+            </div>
+            
+            <!-- Settings Panel (Tab 2 on mobile, right side on desktop) -->
+            <div class="setup-panel settings-panel" data-panel="settings">
+                <h2 class="panel-title">Game Settings</h2>
+                
                 <div class="form-group">
                     <label for="pregame-sequence">Pregame Sequence</label>
                     <input type="text" id="pregame-sequence" name="pregameSequence" value="" placeholder="">
@@ -53,28 +74,14 @@
                     <input type="text" id="turn-cycle" name="turnCycle" value="B, W" placeholder="">
                     <span id="turn-cycle-error" class="error-message"></span>
                 </div>
-                
-                <!-- <div class="form-group">
-                    <label for="time-control">Time Control (minutes)</label>
-                    <input type="number" id="time-control" name="timeControl" value="30" min="1" max="180">
-                </div> -->
-                
-                <button type="submit" class="btn-primary">Create Game</button>
-            </form>
+            </div>
         </div>
         
-        <div class="setup-preview">
-            <h2>Starting position</h2>
-            <div class="stone-toolbar">
-                <button type="button" class="stone-btn" data-color="-1" title="Delete">✖️</button>
-                <button type="button" class="stone-btn" data-color="1" title="Black">⚫</button>
-                <button type="button" class="stone-btn" data-color="2" title="White">⚪</button>
-                <button type="button" class="stone-btn" data-color="3" title="Red">🔴</button>
-                <button type="button" class="stone-btn" data-color="4" title="Yellow">🟡</button>
-                <button type="button" class="stone-btn" data-color="5" title="Cobalt">🔵</button>
-            </div>
-            <div id="preview-container"></div>
-        </div>
+        <footer class="setup-footer">
+            <form id="game-setup-form">
+                <button type="submit" class="btn-primary btn-create">Create Game</button>
+            </form>
+        </footer>
     </div>
     
     <!-- Firebase configuration -->
