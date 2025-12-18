@@ -1247,3 +1247,92 @@ h2 {
         height: 16px;
     }
 }
+
+/* High DPI screens - larger touch targets */
+@media (pointer: coarse) {
+    #bottom-bar {
+        min-height: 100px;
+    }
+    
+    #history-controls {
+        height: 44px;
+    }
+    
+    #bottom-game-controls {
+        height: 44px;
+    }
+    
+    .history-btn {
+        width: 44px;
+        height: 44px;
+        padding: 8px;
+    }
+    
+    .history-counter {
+        font-size: 16px;
+        min-width: 70px;
+    }
+    
+    #bottom-game-controls .btn-primary,
+    #bottom-game-controls .btn-secondary {
+        padding: 10px 18px;
+        font-size: 15px;
+        height: 40px;
+    }
+    
+    #bottom-game-controls .undo-btn {
+        height: 40px;
+        padding: 0 18px;
+        font-size: 15px;
+    }
+    
+    #bottom-game-controls .game-status {
+        font-size: 15px;
+        line-height: 28px;
+    }
+    
+    .undo-btn {
+        padding: 10px 18px;
+        font-size: 15px;
+    }
+    
+    .undo-btn svg {
+        width: 20px;
+        height: 20px;
+    }
+}
+
+/* Remove hover effects on touch devices */
+@media (hover: none) {
+    .history-btn:hover:not(:disabled) {
+        background: transparent;
+        color: #667eea;
+    }
+    
+    .undo-btn:hover {
+        background: #dc3545;
+        transform: none;
+    }
+    
+    .btn-primary:hover {
+        background: #667eea;
+    }
+    
+    .btn-secondary:hover,
+    .enter-scoring-btn:hover,
+    .exit-scoring-btn:hover {
+        background: #f0f0f0;
+    }
+    
+    .player-card.empty:hover {
+        background: #f5f5f5;
+        border-color: transparent;
+    }
+    
+    .home-btn:hover {
+        background: white;
+        color: #667eea;
+        transform: none;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+}

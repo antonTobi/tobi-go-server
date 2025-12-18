@@ -291,14 +291,18 @@ class Board {
     }
 
     calculateTransform(canvasWidth, canvasHeight) {
-        this.scale = Math.floor(Math.min(
-            canvasWidth / this.width,
-            canvasHeight / this.height
-        ));
+        // Add 1 unit margin on each side for stone radius
+        const marginWidth = this.width + 1;
+        const marginHeight = this.height + 1;
+        
+        this.scale = Math.min(
+            canvasWidth / marginWidth,
+            canvasHeight / marginHeight
+        );
         this.offsetX = -this.boundingBox.minX * this.scale +
-            Math.round((canvasWidth - this.scale * this.width) / 2);
+            (canvasWidth - this.scale * this.width) / 2;
         this.offsetY = -this.boundingBox.minY * this.scale +
-            Math.round((canvasHeight - this.scale * this.height) / 2);
+            (canvasHeight - this.scale * this.height) / 2;
         this.sw = 0.05 * this.scale;
         this.sp = Math.max(0.2 * this.scale, 3);
     }
