@@ -143,7 +143,7 @@ function initBoardSketch() {
             canvas.mouseMoved(handleMouseMoved);
             canvas.touchStarted(handleTouchStarted);
             canvas.touchMoved(handleTouchMoved);
-            canvas.touchEnded(handleTouchEnded);
+            // Note: touchEnded is attached globally via p.touchEnded below
         };
         
         function handleMousePressed() {
@@ -224,15 +224,6 @@ function initBoardSketch() {
                 return false; // Prevent default
             }
         }
-        
-        function handleTouchEnded() {
-            isDragging = false;
-            dragFromColor = null;
-            dragToColor = null;
-            // Clear hover node to remove ghost stone
-            hoverNode = null;
-            p.redraw();
-        }
 
         p.draw = () => {
             p.background(255, 193, 140);
@@ -258,6 +249,16 @@ function initBoardSketch() {
                 applyDragToNode(newHover);
                 p.redraw();
             }
+        };
+        
+        // Use global touchEnded to ensure it fires even if finger moves off canvas
+        p.touchEnded = () => {
+            isDragging = false;
+            dragFromColor = null;
+            dragToColor = null;
+            // Clear hover node to remove ghost stone
+            hoverNode = null;
+            p.redraw();
         };
 
         p.windowResized = () => {

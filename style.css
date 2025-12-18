@@ -502,8 +502,8 @@ h2 {
 .setup-body {
     padding: 0;
     margin: 0;
-    height: 100dvh;
-    height: 100vh;
+    height: 100vh; /* Fallback */
+    height: 100dvh; /* Dynamic viewport height - accounts for mobile browser chrome */
     display: flex;
     background-color: rgb(221, 221, 221);
     overflow: hidden;
