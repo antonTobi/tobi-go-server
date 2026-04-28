@@ -127,6 +127,10 @@ function addVariant(type) {
     el.querySelector('.variant-delete').addEventListener('click', () => removeVariant(id));
 
     buildVariantBody(entry, bodyId);
+
+    // Scroll the content area to the bottom so the new entry is visible
+    const content = document.querySelector('.setup-content');
+    if (content) content.scrollTop = content.scrollHeight;
 }
 
 function buildVariantBody(entry, containerId) {
