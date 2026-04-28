@@ -677,7 +677,7 @@ h2 {
     overflow-y: auto;
     overflow-x: hidden;
     /* Add padding at bottom to account for fixed footer */
-    padding-bottom: calc(70px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(100px + env(safe-area-inset-bottom, 0px));
 }
 
 .setup-panel {

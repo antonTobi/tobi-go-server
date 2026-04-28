@@ -92,6 +92,7 @@ function initHomePage() {
 
 function startGamesListener() {
     if (gamesRef) return; // already attached
+    gamesRef = db.ref('games').orderByChild('createdAt').limitToLast(12);
     gamesRef.on('value', (snapshot) => {
         const games = snapshot.val();
         if (!games) {
