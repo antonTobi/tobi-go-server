@@ -55,6 +55,7 @@ async function loadDisplayName() {
 // Listen for auth ready event (faster than onAuthStateChanged)
 window.addEventListener('authReady', (e) => {
     updateAuthStatus(e.detail.user);
+    startGamesListener();
 });
 
 // Listen for auth errors (e.g., from Google redirect)
@@ -87,9 +88,10 @@ function initHomePage() {
     
     // Setup auth UI
     setupAuthUI();
-    
-    // Listen for the 12 most recently created games, sorted by createdAt
-    gamesRef = db.ref('games').orderByChild('createdAt').limitToLast(12);
+}
+
+function startGamesListener() {
+    if (gamesRef) return; // already attached
     gamesRef.on('value', (snapshot) => {
         const games = snapshot.val();
         if (!games) {

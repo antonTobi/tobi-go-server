@@ -360,8 +360,8 @@ class MoveListWidget {
         this.popup = document.createElement('div');
         this.popup.className = 'move-edit-popup';
         this.popup.style.display = 'none';
-        this.container.style.position = 'relative';
-        this.container.appendChild(this.popup);
+        this.popup.style.position = 'fixed';
+        document.body.appendChild(this.popup);
         // Always stop mousedown propagation so outside-click handler doesn't dismiss popup
         this.popup.addEventListener('mousedown', (e) => e.stopPropagation());
     }
@@ -375,18 +375,26 @@ class MoveListWidget {
         this.popup.innerHTML = this._buildPopupHTML(move, idx);
 
         if (!isRebuild) {
-            // Position: centered on stone, then clamp inside container
+            // Position relative to viewport so the popup escapes any scroll/overflow containers.
+            const containerRect = this.container.getBoundingClientRect();
             const sw = this._slotWidth();
-            const idealLeft = idx * sw + sw / 2;
-            const containerWidth = this.container.offsetWidth;
-            const popupWidth = this.popup.offsetWidth;
+            const idealLeft = containerRect.left + idx * sw + sw / 2;
+            const popupWidth = this.popup.offsetWidth || 260;
+            const popupHeight = this.popup.offsetHeight || 200;
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
 
             let left = idealLeft - popupWidth / 2;
-            // Clamp so popup stays within container bounds
-            left = Math.max(0, Math.min(left, containerWidth - popupWidth));
+            left = Math.max(4, Math.min(left, vw - popupWidth - 4));
+
+            let top = containerRect.bottom + 4;
+            if (top + popupHeight > vh - 4) {
+                const topAbove = containerRect.top - popupHeight - 4;
+                top = topAbove >= 4 ? topAbove : Math.max(4, vh - popupHeight - 4);
+            }
 
             this.popup.style.left = left + 'px';
-            this.popup.style.top = this._canvasHeight() + 'px';
+            this.popup.style.top = top + 'px';
             this.popup.style.transform = 'none';
         }
 
