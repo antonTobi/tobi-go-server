@@ -19,6 +19,7 @@
     
     <!-- Board class -->
     <script src="/board.js"></script>
+
 </head>
 <body class="game-body">
     <div class="game-container">
@@ -32,10 +33,12 @@
         <!-- Portrait layout: player cards at top -->
         <div id="top-bar">
             <div id="top-player-cards"></div>
+            <div id="turn-order-container"></div>
         </div>
         
         <div id="board-wrapper">
             <div id="board-container"></div>
+            <div id="illegal-move-toast"></div>
         </div>
         
         <!-- Bottom bar: history controls and game controls for portrait -->
@@ -48,6 +51,7 @@
         <div id="players-sidebar">
             <h3>Players</h3>
             <div id="player-cards"></div>
+            <div id="sidebar-turn-order-container"></div>
             <div id="sidebar-history-controls"></div>
             <div id="game-controls"></div>
         </div>
@@ -55,6 +59,9 @@
     
     <!-- Firebase configuration -->
     <script src="/firebase-config.js"></script>
+
+    <!-- Turn order display -->
+    <script src="/turn-order-display.js"></script>
     
     <!-- Game script -->
     <script src="/game.js"></script>

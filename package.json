@@ -12,6 +12,7 @@
   "license": "ISC",
   "dependencies": {
     "firebase": "^12.6.0",
-    "p5": "^2.1.1"
+    "p5": "^2.1.1",
+    "quickjs-emscripten": "^0.31.0"
   }
 }

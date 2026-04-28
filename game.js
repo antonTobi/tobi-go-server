@@ -19,20 +19,30 @@ let seatsRef = null;
 let board = null;
 let hoverNode = null;
 let gameSettings = null;
-let gameCreatedBy = null;  // Host user ID
-let gameStarted = false;   // Whether the game has started
-let inScoring = false;     // Whether we're in scoring mode
-let deadChains = {};       // { canonicalIndex: true/false }
-let canonicalIndexMap = null; // { nodeIndex: canonicalIndex } - computed when entering scoring
-let territory = null;      // { nodeIndex: ownerColor } - computed when deadChains changes
-let acceptedScores = {};   // { playerNumber: true } - players who accepted the current score
-let gameOver = false;      // Whether the game has ended
-let gameLoaded = false;    // Whether the initial game data has been loaded
-let acceptCooldown = false; // Prevents accepting immediately after a chain toggle
-let seats = {};         // { playerNumber: odIndex }
-let mySeat = null;       // The player number I'm sitting in (1-5), or null
-let requiredSeats = [];  // Player numbers that need seats (derived from turnCycle)
-let p5Instance = null;   // Reference to p5 sketch for redrawing
+let gameCreatedBy = null;       // Host user ID
+let phase = 'lobby';            // 'lobby'|'playing'|'paused'|'scoring'|'finished'
+let clocks = {};                // { playerNum: clockValue } — <1e12=paused ms, >=1e12=expiry timestamp
+let request = null;             // Current request object or null
+let deadChains = {};            // { canonicalIndex: true }
+let canonicalIndexMap = null;   // { nodeIndex: canonicalIndex } — computed when entering scoring
+let territory = null;           // { nodeIndex: ownerColor } — computed when deadChains changes
+let gameLoaded = false;
+let acceptCooldown = false;     // Prevents accepting immediately after a chain toggle
+let seats = {};                 // { playerNumber: uid }
+let mySeat = null;              // The player number I'm sitting in (1-5), or null
+let requiredSeats = [];         // Player numbers that need seats (derived from mainSequence)
+let p5Instance = null;          // Reference to p5 sketch for redrawing
+let turnOrderDisplay = null;    // TurnOrderDisplay for main area
+let sidebarTurnOrderDisplay = null; // TurnOrderDisplay for sidebar
+let debugMode = false;          // Debug mode: host can play all seats
+let clockInterval = null;       // setInterval handle for clock display updates
+let serverTimeOffset = 0;       // Firebase server time offset (ms): serverTime = Date.now() + serverTimeOffset
+function serverNow() { return Date.now() + serverTimeOffset; }
+
+const isPlaying  = () => phase === 'playing';
+const isScoring  = () => phase === 'scoring';
+const isFinished = () => phase === 'finished';
+const isLobby    = () => phase === 'lobby';
 
 // History navigation state
 let liveMoves = [];      // All moves from database, stored separately
@@ -44,8 +54,22 @@ window._debugBoard = () => board;
 window._debugSeats = () => ({ seats, mySeat, requiredSeats });
 window._debugHistory = () => ({ liveMoves, viewIndex, isViewingHistory, totalMoves: liveMoves.length });
 
-// Initialize game
-initGame();
+// Initialize game when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initGame);
+} else {
+    initGame();
+}
+
+let _toastTimer = null;
+function showToast(msg) {
+    const el = document.getElementById('illegal-move-toast');
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.add('visible');
+    clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => el.classList.remove('visible'), 2500);
+}
 
 // Setup UI event handlers
 function setupUIHandlers() {
@@ -108,56 +132,50 @@ if (document.readyState === 'loading') {
 function initGame() {
     gameRef = db.ref(`games/${gameId}`);
     seatsRef = db.ref(`games/${gameId}/seats`);
-    movesRef = db.ref(`games/${gameId}/moves`);
+    movesRef = db.ref(`games/${gameId}/${G_MOVES}`);
 
-    // Load game data first
+    // Keep server time offset in sync so all clients share the same clock reference
+    db.ref('.info/serverTimeOffset').on('value', snap => {
+        serverTimeOffset = snap.val() || 0;
+    });
+
     gameRef.once('value')
         .then((snapshot) => {
             const gameData = snapshot.val();
-            if (!gameData || !gameData.settings) {
+            if (!gameData) {
                 alert('Game not found');
                 window.location.href = '/';
                 return;
             }
-            
-            gameSettings = gameData.settings;
+
+            gameSettings  = decompressGameSetting(gameData);
             gameCreatedBy = gameData.createdBy;
-            gameStarted = gameData.started || false;
-            inScoring = gameData.inScoring || false;
-            gameOver = gameData.gameOver || false;
-            deadChains = gameData.deadChains || {};
-            acceptedScores = gameData.acceptedScores || {};
+            phase         = gameData[G_PHASE]       || 'lobby';
+            clocks        = gameData[G_CLOCKS]      || {};
+            request       = gameData[G_REQUEST]     || null;
+            deadChains    = gameData[G_DEAD_CHAINS] || {};
             gameLoaded = true;
 
-            // Determine required seats from turnCycle
-            requiredSeats = getRequiredSeats(gameSettings.turnCycle);
-            
-            // Initialize p5 sketch
-            p5Instance = new p5(createSketch());
-            
-            // Render initial UI
-            renderPlayerCards();
-            renderHistoryControls(); // This also calls renderGameControls()
+            requiredSeats = getRequiredSeats(gameSettings);
 
-            // Listen for seat changes
+            const loadedSeats = gameData.seats || {};
+            if (isPlaying() && Object.keys(loadedSeats).length === 0 && currentUser && gameCreatedBy === currentUser.uid) {
+                debugMode = true;
+                console.log('Debug mode: no seats occupied, host can play all moves');
+            }
+
+            p5Instance = new p5(createSketch());
+
+            renderPlayerCards();
+            renderHistoryControls();
+            renderTurnOrder();
+            startClockInterval();
+
             seatsRef.on('value', handleSeatsChanged);
-            
-            // Listen for started state changes
-            gameRef.child('started').on('value', handleStartedChanged);
-            
-            // Listen for scoring state changes
-            gameRef.child('inScoring').on('value', handleScoringChanged);
-            
-            // Listen for dead chains changes
-            gameRef.child('deadChains').on('value', handleDeadChainsChanged);
-            
-            // Listen for accepted scores
-            gameRef.child('acceptedScores').on('value', handleAcceptedScoresChanged);
-            
-            // Listen for game over
-            gameRef.child('gameOver').on('value', handleGameOverChanged);
-            
-            // Listen for moves
+            gameRef.child(G_PHASE).on('value', handlePhaseChanged);
+            gameRef.child(G_DEAD_CHAINS).on('value', handleDeadChainsChanged);
+            gameRef.child(G_CLOCKS).on('value', handleClocksChanged);
+            gameRef.child(G_REQUEST).on('value', handleRequestChanged);
             movesRef.on('child_added', handleMoveAdded);
             movesRef.on('child_removed', handleMoveRemoved);
         })
@@ -167,18 +185,31 @@ function initGame() {
         });
 }
 
-function getRequiredSeats(turnCycle) {
-    if (!turnCycle) return [1, 2]; // Default to 2-player
-    
-    const moves = orderFromString(turnCycle);
+function getRequiredSeats(gameSettings) {
     const players = new Set();
-    
-    moves.forEach(move => {
-        if (move.player >= 1 && move.player <= 5) {
-            players.add(move.player);
+
+    const addFromSequence = (seq) => {
+        if (!seq) return;
+        seq.forEach(turn => {
+            const player = turn.player !== undefined ? turn.player : turn;
+            if (player >= 1 && player <= 5) players.add(player);
+        });
+    };
+
+    addFromSequence(gameSettings.mainSequence);
+
+    if (gameSettings.setupTurns) {
+        for (const st of gameSettings.setupTurns) addFromSequence(st.sequence);
+    }
+
+    if (gameSettings.powers) {
+        for (const playerNum of Object.keys(gameSettings.powers)) {
+            const p = parseInt(playerNum);
+            if (p >= 1 && p <= 5) players.add(p);
         }
-    });
-    
+    }
+
+    if (players.size === 0) return [1, 2];
     return Array.from(players).sort((a, b) => a - b);
 }
 
@@ -204,20 +235,19 @@ function handleSeatsChanged(snapshot) {
 function handleMoveAdded(snapshot) {
     const move = snapshot.val();
     const moveIndex = parseInt(snapshot.key);
-    
-    if (move && move.i != null && move.c != null) {
-        // Store move in liveMoves array at the correct index
+
+    if (move) {
         liveMoves[moveIndex] = move;
-        
-        // If we're viewing the latest move (not in history mode), auto-advance
+
         if (!isViewingHistory) {
             viewIndex = liveMoves.length;
             rebuildBoardToView();
         }
-        
-        renderPlayerCards(); // Update current turn indicator
-        renderGameControls(); // Update scoring button visibility
-        renderHistoryControls(); // Update navigation buttons
+
+        renderTurnOrder();
+        renderPlayerCards();
+        renderGameControls();
+        renderHistoryControls();
         if (p5Instance) p5Instance.redraw();
     }
 }
@@ -230,11 +260,9 @@ function handleMoveRemoved(snapshot) {
     if (moveIndex < liveMoves.length) {
         liveMoves.length = moveIndex;
         
-        // Adjust viewIndex if it's now beyond the available moves
-        if (viewIndex > liveMoves.length) {
-            viewIndex = liveMoves.length;
-            isViewingHistory = false;
-        }
+        // Always jump to latest position when moves are removed (undo by any client)
+        viewIndex = liveMoves.length;
+        isViewingHistory = false;
         
         rebuildBoardToView();
         renderPlayerCards();
@@ -244,119 +272,95 @@ function handleMoveRemoved(snapshot) {
     }
 }
 
-function handleStartedChanged(snapshot) {
-    const wasStarted = gameStarted;
-    gameStarted = snapshot.val() || false;
-    
-    renderGameControls();
-    
-    // If game just started and I'm the host, process any pregame random moves
-    if (!wasStarted && gameStarted && isHost()) {
-        processRandomMoves();
-    }
-}
-
-function handleScoringChanged(snapshot) {
-    const wasScoring = inScoring;
-    inScoring = snapshot.val() || false;
-    
-    // Compute canonical index map when entering scoring
-    if (!wasScoring && inScoring && board) {
+function handlePhaseChanged(snapshot) {
+    const wasScoring = isScoring();
+    phase = snapshot.val() || 'lobby';
+    if (!wasScoring && isScoring() && board) {
         canonicalIndexMap = board.computeCanonicalIndexMap();
         territory = board.calculateTerritory(deadChains, canonicalIndexMap);
-    } else if (!inScoring) {
+    } else if (!isScoring() && !isFinished()) {
         canonicalIndexMap = null;
         territory = null;
     }
-    
-    renderPlayerCards(); // Update to show/hide scores
+    renderPlayerCards();
     renderGameControls();
+    renderTurnOrder();
+    if (isPlaying() && isHost()) processRandomMoves();
     if (p5Instance) p5Instance.redraw();
 }
 
 function handleDeadChainsChanged(snapshot) {
     const newDeadChains = snapshot.val() || {};
-    
-    // If deadChains changed and we're in scoring mode, activate cooldown
-    if (inScoring && !gameOver) {
+    if (isScoring() && !isFinished()) {
         const changed = JSON.stringify(deadChains) !== JSON.stringify(newDeadChains);
         if (changed) {
             acceptCooldown = true;
-            renderGameControls(); // Re-render to show disabled button
+            renderGameControls();
             setTimeout(() => {
                 acceptCooldown = false;
                 renderGameControls();
             }, 2000);
         }
     }
-    
     deadChains = newDeadChains;
-    
-    // Recalculate territory
-    if (inScoring && board && canonicalIndexMap) {
+    if (isScoring() && board && canonicalIndexMap) {
         territory = board.calculateTerritory(deadChains, canonicalIndexMap);
     } else {
         territory = null;
     }
-    
-    renderPlayerCards(); // Update scores
+    renderPlayerCards();
     if (p5Instance) p5Instance.redraw();
 }
 
-function handleAcceptedScoresChanged(snapshot) {
-    acceptedScores = snapshot.val() || {};
-    renderPlayerCards(); // Update checkmarks
-    renderGameControls(); // Update button state
+function handleClocksChanged(snapshot) {
+    clocks = snapshot.val() || {};
+    renderPlayerCards();
 }
 
-function handleGameOverChanged(snapshot) {
-    gameOver = snapshot.val() || false;
+function handleRequestChanged(snapshot) {
+    request = snapshot.val() || null;
     renderPlayerCards();
     renderGameControls();
-    if (p5Instance) p5Instance.redraw();
 }
 
-// Rebuild the board state from scratch up to the current viewIndex
+let isRebuilding = false;
+let rebuildPending = false;
+
 function rebuildBoardToView() {
     if (!board || !gameSettings) return;
-    
-    // Reset board to initial state
-    board = Board.fromSettings({
-        boardType: gameSettings.boardType || 'grid',
-        boardWidth: gameSettings.boardWidth || 9,
-        boardHeight: gameSettings.boardHeight || 9,
-        pregameSequence: gameSettings.pregameSequence || '',
-        turnCycle: gameSettings.turnCycle,
-        presetStones: gameSettings.presetStones
-    });
-    
-    // Recalculate transform with current canvas size
-    if (p5Instance) {
-        board.calculateTransform(p5Instance.width, p5Instance.height);
+
+    if (isRebuilding) {
+        rebuildPending = true;
+        return;
     }
-    
-    // Replay moves up to viewIndex
-    for (let i = 0; i < viewIndex && i < liveMoves.length; i++) {
-        const move = liveMoves[i];
-        if (move) {
-            if (move.i === -1) {
-                board.pass(move.c);
-            } else {
-                board.placeStone(move.i, move.c);
-            }
+    isRebuilding = true;
+    try {
+        board = Board.fromSettings(gameSettings);
+        if (p5Instance) board.calculateTransform(p5Instance.width, p5Instance.height);
+
+        for (let i = 0; i < viewIndex && i < liveMoves.length; i++) {
+            if (liveMoves[i]) board.applyMoveRecord(liveMoves[i]);
+        }
+
+        renderTurnOrder();
+
+        const viewingLatest = viewIndex >= liveMoves.length;
+        if ((isScoring() || isFinished()) && viewingLatest) {
+            canonicalIndexMap = board.computeCanonicalIndexMap();
+            territory = board.calculateTerritory(deadChains, canonicalIndexMap);
+        } else {
+            canonicalIndexMap = null;
+            territory = null;
+        }
+    } finally {
+        isRebuilding = false;
+        if (rebuildPending) {
+            rebuildPending = false;
+            rebuildBoardToView();
         }
     }
-    
-    // If in scoring mode or game over AND viewing latest, recompute canonical index map and territory
-    const viewingLatest = viewIndex >= liveMoves.length;
-    if ((inScoring || gameOver) && viewingLatest) {
-        canonicalIndexMap = board.computeCanonicalIndexMap();
-        territory = board.calculateTerritory(deadChains, canonicalIndexMap);
-    } else {
-        canonicalIndexMap = null;
-        territory = null;
-    }
 }
+
 
 // History navigation functions
 function goToFirstMove() {
@@ -371,7 +375,6 @@ function goToFirstMove() {
 
 function goToPrevMove() {
     if (viewIndex <= 0) {
-        // Hit the boundary - stop any active holds
         stopAllHolds();
         return;
     }
@@ -385,16 +388,11 @@ function goToPrevMove() {
 
 function goToNextMove() {
     if (viewIndex >= liveMoves.length) {
-        // Hit the boundary - stop any active holds
         stopAllHolds();
         return;
     }
     viewIndex++;
-    // If we've reached the latest move, exit history mode
-    if (viewIndex >= liveMoves.length) {
-        isViewingHistory = false;
-        stopAllHolds(); // Stop holds when we reach the end
-    }
+    if (viewIndex >= liveMoves.length) isViewingHistory = false;
     rebuildBoardToView();
     renderHistoryControls();
     renderPlayerCards();
@@ -410,6 +408,7 @@ function goToLastMove() {
     renderPlayerCards();
     if (p5Instance) p5Instance.redraw();
 }
+
 
 // Setup hold-to-repeat behavior for a button
 // Single click fires once, hold fires once then delays, then repeats quickly
@@ -507,51 +506,48 @@ function stopAllHolds() {
 }
 
 function undoToCurrentPosition() {
-    // Only allow undo if: player is seated, viewing history, game not over, game started
-    if (mySeat === null || !isViewingHistory || gameOver || !gameStarted) {
-        console.error('Cannot undo: conditions not met');
-        return;
-    }
-    
-    const targetMoveCount = viewIndex;
-    
-    // Remove all moves from viewIndex onwards
+    if ((mySeat === null && !debugMode) || !isViewingHistory || isFinished() || !isPlaying()) return;
+
     const updates = {};
-    for (let i = targetMoveCount; i < liveMoves.length; i++) {
-        updates[i] = null;
+    for (let i = viewIndex; i < liveMoves.length; i++) {
+        updates[`${G_MOVES}/${i}`] = null;
     }
-    
-    // Also exit scoring mode if we're in it
-    if (inScoring) {
-        gameRef.update({
-            inScoring: false,
-            deadChains: null,
-            acceptedScores: null
-        });
+    updates[G_REQUEST] = null;
+    if (isScoring()) {
+        updates[G_PHASE] = 'playing';
+        updates[G_DEAD_CHAINS] = null;
     }
-    
-    movesRef.update(updates, (error) => {
-        if (error) {
-            console.error('Undo failed:', error);
-            return;
+
+    // Reset each player's clock to the time recorded in their most recent kept move.
+    if (gameSettings?.timeSettings) {
+        const lastTimeLeft = {};
+        // Walk the move list with a scratch board to know who played each move.
+        const scratch = Board.fromSettings(gameSettings);
+        for (let i = 0; i < viewIndex; i++) {
+            const m = liveMoves[i];
+            if (!m) continue;
+            const playerNum = scratch.currentTurn?.player;
+            scratch.applyMoveRecord(m);
+            if (m[M_TIME_LEFT] !== undefined && playerNum > 0) {
+                lastTimeLeft[playerNum] = m[M_TIME_LEFT];
+            }
         }
-        
-        console.log(`Undo successful: removed moves from ${targetMoveCount} to ${liveMoves.length - 1}`);
-        
-        // Update local state
-        liveMoves.length = targetMoveCount;
-        isViewingHistory = false;
-        viewIndex = targetMoveCount;
-        
-        // Rebuild board to the new position
-        rebuildBoardToView();
-        renderHistoryControls();
-        renderPlayerCards();
-        renderGameControls();
-        if (p5Instance) p5Instance.redraw();
-        
-        // Process any random moves that should follow
-        setTimeout(processRandomMoves, 500);
+        for (const [p, t] of Object.entries(lastTimeLeft)) {
+            updates[`${G_CLOCKS}/${p}`] = t;
+        }
+        // Also clear the clocks for players whose time was never set within viewIndex
+        // (i.e. the game clock was started by a move that's being undone).
+        for (const playerNum of Object.keys(gameSettings.timeSettings)) {
+            if (!(playerNum in lastTimeLeft)) {
+                const initial = gameSettings.timeSettings[playerNum]?.maintime;
+                updates[`${G_CLOCKS}/${playerNum}`] = initial ?? null;
+            }
+        }
+    }
+
+    gameRef.update(updates, (error) => {
+        if (error) console.error('Undo failed:', error);
+        else setTimeout(processRandomMoves, 300);
     });
 }
 
@@ -559,127 +555,106 @@ function isHost() {
     return currentUser && gameCreatedBy === currentUser.uid;
 }
 
+function allSeatsFilled() {
+    return requiredSeats.length > 0 && requiredSeats.every(p => !!seats[p]);
+}
+
 function startGame() {
-    if (!isHost()) {
-        console.error('Only the host can start the game');
-        return;
-    }
-    
-    gameRef.child('started').set(true);
+    if (!isHost() || !allSeatsFilled()) return;
+    gameRef.child(G_PHASE).set('playing');
 }
 
 function enterScoring() {
-    if (!canMakeMove()) {
-        console.error('Not your turn');
-        return;
+    if (!canMakeMove()) return;
+    const updates = {
+        [G_PHASE]:       'scoring',
+        [G_DEAD_CHAINS]: null,
+        [G_REQUEST]:     null,
+    };
+    // Pause all running clocks (convert expiry timestamps to remaining ms)
+    for (const [p, val] of Object.entries(clocks)) {
+        if (val >= 1e12) {
+            updates[`${G_CLOCKS}/${p}`] = Math.max(0, val - serverNow());
+        }
     }
-    
-    // Clear dead chains and accepted scores from previous scoring session
-    gameRef.update({
-        inScoring: true,
-        deadChains: null,
-        acceptedScores: null
-    });
+    gameRef.update(updates);
 }
 
 function exitScoring() {
-    gameRef.child('inScoring').set(false);
+    const updates = { [G_PHASE]: 'playing' };
+    // Restart the active player's clock as a running expiry timestamp
+    if (board && gameSettings?.timeSettings) {
+        const playerNum = board.currentTurn?.player;
+        if (playerNum > 0 && gameSettings.timeSettings[playerNum]) {
+            const val = clocks[playerNum];
+            if (val !== undefined && val !== null && val < 1e12 && val > 0) {
+                updates[`${G_CLOCKS}/${playerNum}`] = serverNow() + val;
+            }
+        }
+    }
+    gameRef.update(updates);
 }
 
 function toggleDeadChain(stone) {
-    if (!inScoring || !board || !canonicalIndexMap || gameOver) return;
-    
+    if (!isScoring() || !board || !canonicalIndexMap || isFinished()) return;
     const canonicalIndex = canonicalIndexMap[stone.i];
     if (canonicalIndex === undefined) return;
-    
-    // Toggle the dead state and reset all accepted scores
     const currentState = deadChains[canonicalIndex] || false;
     gameRef.update({
-        [`deadChains/${canonicalIndex}`]: !currentState,
-        acceptedScores: null
+        [`${G_DEAD_CHAINS}/${canonicalIndex}`]: !currentState,
+        [G_REQUEST]: null,
     });
 }
 
 function acceptScore() {
-    if (!inScoring || mySeat === null || acceptCooldown || gameOver) return;
-    
-    // Set my acceptance
-    gameRef.child('acceptedScores').child(mySeat).set(true, (error) => {
-        if (error) {
-            console.error('Failed to accept score:', error);
-            return;
-        }
-        
-        // Check if all players have accepted
-        checkAllAccepted();
+    if (!isScoring() || mySeat === null || acceptCooldown || isFinished()) return;
+    const updates = {};
+    if (!request) {
+        updates[G_REQUEST] = { [RQ_TYPE]: 'accept', [RQ_AGREES]: { [mySeat]: true } };
+    } else {
+        updates[`${G_REQUEST}/${RQ_AGREES}/${mySeat}`] = true;
+    }
+    gameRef.update(updates, (error) => {
+        if (!error) checkAllAccepted();
     });
 }
 
 function checkAllAccepted() {
-    // Re-read acceptedScores to get latest
-    gameRef.child('acceptedScores').once('value', (snapshot) => {
-        const accepted = snapshot.val() || {};
-        
-        // Check if all required seats have accepted
-        const allAccepted = requiredSeats.every(playerNum => accepted[playerNum] === true);
-        
+    gameRef.child(G_REQUEST).once('value', (snapshot) => {
+        const req = snapshot.val();
+        if (!req || req[RQ_TYPE] !== 'accept') return;
+        const agreed = req[RQ_AGREES] || {};
+        const allAccepted = requiredSeats.every(p => agreed[p] === true);
         if (allAccepted) {
-            // End the game
-            gameRef.child('gameOver').set(true);
+            gameRef.update({ [G_PHASE]: 'finished', [G_REQUEST]: null });
         }
     });
 }
 
 function processRandomMoves() {
-    // Process all consecutive random moves (player === 0) until a human player's turn
-    // Uses setTimeout to add a 1 second delay between each random move
-    
-    if (!board || board.currentMove.player !== 0) {
-        return; // No random move to process
-    }
-    
-    const currentMove = board.currentMove;
-    
-    // Find legal intersections
-    // TODO: Disallow eye-filling self-atari, but not other self-atari
-    // new def of eye-filling: all neighbors same chain
-    const candidates = board.nodes.filter(n => n.color === currentMove.from
-        && !board.isSuicide(n, currentMove.to));
-    
-    // Determine the move to submit: either a random candidate or a pass (-1)
-    let moveIndex;
-    let moveData;
-    
+    if (!board || !isPlaying()) return;
+    if (isViewingHistory) return;
+    if (hasSoleWinner()) return;
+    if (board.currentTurn.player !== 0) return;
+
+    const currentTurn = board.currentTurn;
+    const candidates = board.nodes.filter(node => board.tryMove(node.i, currentTurn.color) !== null);
+
+    let moveRecord;
     if (candidates.length === 0) {
-        // No legal moves available - submit a pass
-        console.log('No legal moves for random player, passing');
-        moveIndex = liveMoves.length;
-        moveData = { i: -1, c: currentMove.to };
+        moveRecord = { [M_PASS]: 1 };
     } else {
-        // Pick a random candidate
-        const pickedMove = candidates[Math.floor(Math.random() * candidates.length)];
-        moveIndex = liveMoves.length;
-        moveData = { i: pickedMove.i, c: currentMove.to };
+        const picked = candidates[Math.floor(Math.random() * candidates.length)];
+        moveRecord = { [M_INDEX]: picked.i, [M_COLOR]: currentTurn.color };
+        // No timeLeft for random player (player === 0)
     }
-    
-    // Submit the move via transaction
-    const moveRef = movesRef.child(moveIndex);
-    moveRef.transaction((currentValue) => {
-        if (currentValue !== null) {
-            return; // Abort - move already exists
-        }
-        return moveData;
-    }, (error, committed) => {
+
+    const updates = {};
+    updates[`${G_MOVES}/${liveMoves.length}`] = moveRecord;
+    gameRef.update(updates, (error) => {
         if (error) {
-            console.error('Random move transaction failed:', error);
-        } else if (committed) {
-            if (moveData.i === -1) {
-                console.log('Random player passed');
-            } else {
-                console.log('Random move placed at node', moveData.i);
-            }
-            // Schedule next random move after 1 second delay if needed
-            // The move will be applied via handleMoveAdded before this fires
+            console.error('Random move update failed:', error);
+        } else {
             setTimeout(processRandomMoves, 1000);
         }
     });
@@ -690,6 +665,9 @@ function takeSeat(playerNum) {
         console.error('User not authenticated');
         return;
     }
+
+    // Seats can only be changed in the lobby
+    if (!isLobby()) return;
     
     // If clicking my own seat, leave it
     if (mySeat === playerNum) {
@@ -714,38 +692,155 @@ function takeSeat(playerNum) {
 }
 
 function isMyTurn() {
-    if (!board || mySeat === null || !gameStarted) return false;
-    return board.currentMove.player === mySeat;
+    if (!board || !isPlaying()) return false;
+    if (mySeat !== null && board.eliminatedPlayers.has(mySeat)) return false;
+    if (debugMode && isHost()) return true;
+    if (mySeat === null) return false;
+    return board.currentTurn.player === mySeat;
+}
+
+function hasSoleWinner() {
+    if (!board || !isPlaying()) return false;
+    const alive = requiredSeats.filter(p => !board.eliminatedPlayers.has(p));
+    return alive.length === 1;
 }
 
 function canMakeMove() {
-    // Can only make moves when viewing the latest position (not in history mode)
-    return currentUser && isMyTurn() && !isViewingHistory;
+    return currentUser && isMyTurn() && !isViewingHistory && !hasSoleWinner();
 }
 
-function addMove(i, c) {
-    if (!canMakeMove()) {
-        console.error('Not your turn or not authenticated');
-        return;
-    }
-    
-    const moveRef = movesRef.child(liveMoves.length);
+function addMove(i, c, primaryColor = c) {
+    if (!canMakeMove()) return;
 
-    moveRef.transaction((currentValue) => {
-        if (currentValue !== null) {
-            return; // Abort - move already exists
+    // Legality is always checked against the primary (intended) color.
+    const { board: nextBoard, reason } = board.tryMoveReason(i, primaryColor);
+    if (!nextBoard) {
+        // If c === primaryColor this is a genuine illegal move by the player.
+        // If c !== primaryColor the traitor color was rolled — the move is forced through anyway.
+        if (c === primaryColor) {
+            const messages = {
+                occupied: 'That intersection is occupied.',
+                empty:    'That intersection is already empty.',
+                suicide:  'That move would be suicidal.',
+                ko:       'That move is forbidden by the ko rule.',
+                'forbidden-chain-size': 'That move would create a forbidden chain size.',
+            };
+            showToast(messages[reason] || 'Illegal move.');
+            return;
         }
-        return { i, c };
-    }, (error, committed) => {
+        // Forced traitor move: still need to check the spot isn't occupied by another stone.
+        if (reason === 'occupied') {
+            showToast('That intersection is occupied.');
+            return;
+        }
+        // Suicide/ko with traitor color: force the move. applyMoveRecord handles capture.
+    }
+
+    const playerNum = board.currentTurn.player;
+    const moveRecord = { [M_INDEX]: i, [M_COLOR]: c };
+
+    // Add timeLeft if this player has time settings and is a human player
+    if (playerNum > 0 && gameSettings.timeSettings?.[playerNum]) {
+        const timeLeft = computeTimeLeft(playerNum);
+        if (timeLeft !== null) moveRecord[M_TIME_LEFT] = timeLeft;
+    }
+
+    const updates = {};
+    updates[`${G_MOVES}/${liveMoves.length}`] = moveRecord;
+
+    // Update clocks using nextBoard (always from the primary-color check).
+    // If nextBoard is null (forced traitor move), advance turn order manually for clock purposes.
+    if (gameSettings.timeSettings) {
+        const timeLeft = computeTimeLeft(playerNum);
+        if (timeLeft !== null) updates[`${G_CLOCKS}/${playerNum}`] = timeLeft;
+        const clockNextBoard = nextBoard || board.tryPass(); // tryPass just advances turn order
+        const nextTurn = clockNextBoard.currentTurn;
+        if (nextTurn && nextTurn.player > 0 && gameSettings.timeSettings[nextTurn.player]) {
+            const nextPlayerClock = clocks[nextTurn.player];
+            if (nextPlayerClock !== undefined && nextPlayerClock !== null) {
+                const remaining = nextPlayerClock >= 1e12
+                    ? Math.max(0, nextPlayerClock - serverNow())
+                    : nextPlayerClock;
+                updates[`${G_CLOCKS}/${nextTurn.player}`] = serverNow() + remaining;
+            }
+        }
+    }
+
+    gameRef.update(updates, (error) => {
         if (error) {
-            console.error('Transaction failed:', error);
-        } else if (!committed) {
-            console.log('Move already made from different client');
+            console.error('Update failed:', error);
         } else {
-            console.log('Move added:', i, c);
-            // Process any following random moves after 1 second delay
             setTimeout(processRandomMoves, 1000);
         }
+    });
+}
+
+function addPass() {
+    if (!canMakeMove()) return;
+
+    const playerNum = board.currentTurn.player;
+    const moveRecord = { [M_PASS]: 1 };
+    const updates = {};
+    updates[`${G_MOVES}/${liveMoves.length}`] = moveRecord;
+
+    if (gameSettings.timeSettings && playerNum > 0) {
+        const timeLeft = computeTimeLeft(playerNum);
+        if (timeLeft !== null) updates[`${G_CLOCKS}/${playerNum}`] = timeLeft;
+        const nextBoard = board.tryPass();
+        const nextTurn = nextBoard?.currentTurn;
+        if (nextTurn && nextTurn.player > 0 && gameSettings.timeSettings[nextTurn.player]) {
+            const nextPlayerClock = clocks[nextTurn.player];
+            if (nextPlayerClock !== undefined && nextPlayerClock !== null) {
+                const remaining = nextPlayerClock >= 1e12
+                    ? Math.max(0, nextPlayerClock - serverNow())
+                    : nextPlayerClock;
+                updates[`${G_CLOCKS}/${nextTurn.player}`] = serverNow() + remaining;
+            }
+        }
+    }
+
+    gameRef.update(updates, (error) => {
+        if (error) console.error('Pass update failed:', error);
+        else setTimeout(processRandomMoves, 1000);
+    });
+}
+
+function revealStone(i) {
+    if (!canMakeMove()) return;
+    const updates = {};
+    updates[`${G_MOVES}/${liveMoves.length}`] = { [M_REVEALED]: i };
+    gameRef.update(updates, (error) => {
+        if (error) console.error('Reveal update failed:', error);
+    });
+}
+
+function addElimination(playerNum, reason) {
+    const updates = {};
+    updates[`${G_MOVES}/${liveMoves.length}`] = { [M_ELIMINATED]: playerNum, [M_ELIM_REASON]: reason };
+    gameRef.update(updates, (error) => {
+        if (error) console.error('Elimination update failed:', error);
+        else setTimeout(processRandomMoves, 300);
+    });
+}
+
+function resign() {
+    if (!mySeat || !isPlaying() || board.eliminatedPlayers.has(mySeat)) return;
+    if (!confirm('Resign from the game?')) return;
+    addElimination(mySeat, 'resign');
+}
+
+function triggerAndSubmitPower(playerNum, powerIndex) {
+    if (!canMakeMove() || board.currentSequence !== null) return;
+    const clone = board.triggerPower(playerNum, powerIndex);
+    if (!clone) {
+        console.error('Cannot trigger power');
+        return;
+    }
+    const updates = {};
+    updates[`${G_MOVES}/${liveMoves.length}`] = { [M_POWER]: powerIndex };
+    gameRef.update(updates, (error) => {
+        if (error) console.error('Power trigger update failed:', error);
+        else setTimeout(processRandomMoves, 1000);
     });
 }
 
@@ -778,33 +873,62 @@ function createPlayerCard(playerNum, containerId) {
     card.className = 'player-card';
     card.id = `${containerId}-card-${playerNum}`;
     card.onclick = () => takeSeat(playerNum);
-    
-    // Stone icon
-    const stone = document.createElement('div');
-    stone.className = `player-stone color-${playerNum}`;
-    card.appendChild(stone);
-    
-    // Player info
+
+    const stoneSz = containerId === 'top' ? 24 : 32;
+    const playerTurn = (gameSettings?.mainSequence?.find(t => t.player === playerNum))
+        || { player: playerNum, color: playerNum };
+    const dpr = window.devicePixelRatio || 1;
+    const stoneCanvas = document.createElement('canvas');
+    stoneCanvas.width  = Math.round(stoneSz * dpr);
+    stoneCanvas.height = Math.round(stoneSz * dpr);
+    stoneCanvas.style.width  = stoneSz + 'px';
+    stoneCanvas.style.height = stoneSz + 'px';
+    stoneCanvas.style.flexShrink = '0';
+    stoneCanvas.style.display = 'block';
+    const stoneCtx = stoneCanvas.getContext('2d');
+    stoneCtx.scale(dpr, dpr);
+    // Draw a simple stone circle (no traitor/triangle decorations on the player card)
+    const r = stoneSz / 2;
+    const [fr, fg, fb] = stoneColors[playerTurn.color];
+    const [sr, sg, sb] = strokeColors[playerTurn.color];
+    stoneCtx.beginPath();
+    stoneCtx.arc(r, r, r - 1, 0, Math.PI * 2);
+    stoneCtx.fillStyle = `rgb(${fr},${fg},${fb})`;
+    stoneCtx.fill();
+    stoneCtx.strokeStyle = `rgb(${sr},${sg},${sb})`;
+    stoneCtx.lineWidth = 1.5;
+    stoneCtx.stroke();
+    card.appendChild(stoneCanvas);
+
     const info = document.createElement('div');
     info.className = 'player-info';
-    
+
     const label = document.createElement('div');
     label.className = 'player-label';
     label.textContent = `Player ${playerNum}`;
     info.appendChild(label);
-    
-    // Player name/status display (will be updated dynamically)
+
     const nameDisplay = document.createElement('div');
     nameDisplay.className = 'player-uid';
     nameDisplay.id = `${containerId}-name-${playerNum}`;
     info.appendChild(nameDisplay);
-    
-    // Score display (will be shown/hidden dynamically)
+
     const scoreDisplay = document.createElement('div');
     scoreDisplay.className = 'player-score';
     scoreDisplay.id = `${containerId}-score-${playerNum}`;
     info.appendChild(scoreDisplay);
-    
+
+    const clockDisplay = document.createElement('div');
+    clockDisplay.className = 'player-clock';
+    clockDisplay.id = `${containerId}-clock-${playerNum}`;
+    clockDisplay.style.display = 'none';
+    info.appendChild(clockDisplay);
+
+    const powersDisplay = document.createElement('div');
+    powersDisplay.className = 'player-powers';
+    powersDisplay.id = `${containerId}-powers-${playerNum}`;
+    info.appendChild(powersDisplay);
+
     card.appendChild(info);
     return card;
 }
@@ -841,25 +965,37 @@ function updatePlayerCard(playerNum, prefix, scores) {
     const odIndex = seats[playerNum];
     const isOccupied = !!odIndex;
     const isMe = currentUser && odIndex === currentUser.uid;
-    const isCurrentTurn = board && board.currentMove.player === playerNum;
-    
+    const isCurrentTurn = board && board.currentTurn && board.currentTurn.player === playerNum;
+    const isEliminated = board?.eliminatedPlayers.has(playerNum);
+
+    // Sole survivor = winner (only one required seat not eliminated)
+    const alivePlayers = requiredSeats.filter(p => !board?.eliminatedPlayers.has(p));
+    const isSoleWinner = isPlaying() && alivePlayers.length === 1 && alivePlayers[0] === playerNum;
+
     const card = document.getElementById(`${prefix}-card-${playerNum}`);
     if (!card) return;
-    
-    // Update card classes
+
     card.className = 'player-card';
-    if (isCurrentTurn && !inScoring) card.classList.add('current-turn');
-    if (isMe) card.classList.add('my-seat');
+    if (isEliminated) card.classList.add('eliminated');
+    if (isSoleWinner) card.classList.add('winner');
+    if (isCurrentTurn && !isLobby() && !isScoring() && !isEliminated) card.classList.add('current-turn');
+    if (isMe && isLobby()) card.classList.add('my-seat'); // green only in lobby
+    if (!isLobby()) card.classList.add('locked'); // seats are frozen after game starts
     if (isOccupied && !isMe) {
         card.classList.add('occupied');
     } else {
         card.classList.add('empty');
     }
-    
-    // Update name display
+
     const nameDisplay = document.getElementById(`${prefix}-name-${playerNum}`);
     if (nameDisplay) {
-        if (isOccupied) {
+        if (isEliminated) {
+            nameDisplay.className = 'player-eliminated-label';
+            nameDisplay.textContent = 'Eliminated';
+        } else if (isSoleWinner) {
+            nameDisplay.className = 'player-uid';
+            nameDisplay.textContent = isMe ? 'You' : (playerDisplayNames[odIndex] || (isOccupied ? odIndex.substring(0, 12) + '...' : ''));
+        } else if (isOccupied) {
             nameDisplay.className = 'player-uid';
             if (isMe) {
                 nameDisplay.textContent = 'You';
@@ -872,34 +1008,125 @@ function updatePlayerCard(playerNum, prefix, scores) {
             nameDisplay.textContent = 'Click to join';
         }
     }
-    
-    // Update score display
+
     const scoreDisplay = document.getElementById(`${prefix}-score-${playerNum}`);
     if (scoreDisplay) {
-        const viewingFinalPosition = viewIndex >= liveMoves.length;
-        const shouldShowScores = (inScoring || gameOver) && viewingFinalPosition;
-        
-        if (shouldShowScores) {
-            const score = scores[playerNum] || 0;
-            const scoreText = `Score: ${score}`;
-            
-            if (gameOver) {
-                const isWinner = scores.maxScore > 0 && score === scores.maxScore;
-                scoreDisplay.innerHTML = isWinner ? `🏆 ${scoreText}` : scoreText;
-                scoreDisplay.className = 'player-score' + (isWinner ? ' winner' : '');
-            } else {
-                const hasAccepted = acceptedScores[playerNum] === true;
-                scoreDisplay.textContent = hasAccepted ? `${scoreText} ✓` : scoreText;
-                scoreDisplay.className = 'player-score' + (hasAccepted ? ' accepted' : '');
-            }
+        if (isSoleWinner) {
+            scoreDisplay.innerHTML = '🏆 Winner';
+            scoreDisplay.className = 'player-score winner';
             scoreDisplay.style.visibility = 'visible';
         } else {
-            // Use placeholder text and visibility:hidden to maintain consistent card size
-            scoreDisplay.textContent = 'Score: 00';
-            scoreDisplay.className = 'player-score';
-            scoreDisplay.style.visibility = 'hidden';
+            const viewingFinalPosition = viewIndex >= liveMoves.length;
+            const shouldShowScores = (isScoring() || isFinished()) && viewingFinalPosition;
+            if (shouldShowScores) {
+                const score = scores[playerNum] || 0;
+                const scoreText = `Score: ${score}`;
+                if (isFinished()) {
+                    const isWinner = scores.maxScore > 0 && score === scores.maxScore;
+                    scoreDisplay.innerHTML = isWinner ? `🏆 ${scoreText}` : scoreText;
+                    scoreDisplay.className = 'player-score' + (isWinner ? ' winner' : '');
+                } else {
+                    const hasAccepted = request?.[RQ_AGREES]?.[playerNum] === true;
+                    scoreDisplay.textContent = hasAccepted ? `${scoreText} ✓` : scoreText;
+                    scoreDisplay.className = 'player-score' + (hasAccepted ? ' accepted' : '');
+                }
+                scoreDisplay.style.visibility = 'visible';
+            } else {
+                scoreDisplay.textContent = 'Score: 00';
+                scoreDisplay.className = 'player-score';
+                scoreDisplay.style.visibility = 'hidden';
+            }
         }
     }
+
+    const clockDisplay = document.getElementById(`${prefix}-clock-${playerNum}`);
+    if (clockDisplay) {
+        const ms = getDisplayTime(playerNum);
+        if (ms !== null && gameSettings?.timeSettings?.[playerNum]) {
+            clockDisplay.textContent = formatTime(ms);
+            clockDisplay.style.display = '';
+            const isRunning = clocks[playerNum] >= 1e12;
+            clockDisplay.classList.toggle('clock-paused', !isRunning);
+        } else {
+            clockDisplay.style.display = 'none';
+        }
+    }
+
+    const powersDisplay = document.getElementById(`${prefix}-powers-${playerNum}`);
+    if (powersDisplay && board) {
+        const playerPowers = board.powers[playerNum] || [];
+        if (playerPowers.length > 0) {
+            powersDisplay.style.display = '';
+            powersDisplay.innerHTML = '';
+            for (const pw of playerPowers) {
+                const item = document.createElement('span');
+                item.className = 'power-item';
+                drawActionPreviewCanvas(item, pw.sequence, 16);
+                const usesLabel = document.createElement('span');
+                usesLabel.className = 'action-uses-label';
+                usesLabel.textContent = `×${pw.usesLeft}`;
+                item.appendChild(usesLabel);
+                powersDisplay.appendChild(item);
+            }
+        } else {
+            powersDisplay.style.display = 'none';
+        }
+    }
+}
+
+function drawActionPreviewCanvas(container, sequence, stoneSize) {
+    const padding = 4;
+    const slotW = stoneSize + padding;
+    const w = sequence.length * slotW + padding;
+    const h = stoneSize + padding * 2;
+    const dpr = window.devicePixelRatio || 1;
+    const canvas = document.createElement('canvas');
+    canvas.width  = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    canvas.style.width  = w + 'px';
+    canvas.style.height = h + 'px';
+    canvas.style.display = 'block';
+    container.appendChild(canvas);
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    const p = createCanvas2DAdapter(ctx);
+    const cy = h / 2;
+    for (let i = 0; i < sequence.length; i++) {
+        const cx = i * slotW + slotW / 2 + padding / 2;
+        drawMoveStone(p, cx, cy, sequence[i], stoneSize);
+    }
+}
+
+function renderTurnOrder() {
+    if (!board) return;
+
+    const showOrder = isPlaying() || isScoring();
+
+    const mainContainer = document.getElementById('turn-order-container');
+    const sidebarContainer = document.getElementById('sidebar-turn-order-container');
+
+    if (!showOrder) {
+        if (mainContainer) mainContainer.style.display = 'none';
+        if (sidebarContainer) sidebarContainer.style.display = 'none';
+        return;
+    }
+
+    if (mainContainer) mainContainer.style.display = 'flex';
+    if (sidebarContainer) sidebarContainer.style.display = 'flex';
+
+    const seq = board.getActiveSequence();
+    const idx = board.getActiveIndex();
+    const activePhase = board.getActivePhase();
+
+    if (!turnOrderDisplay && mainContainer) {
+        turnOrderDisplay = new TurnOrderDisplay('turn-order-container');
+    }
+    if (!sidebarTurnOrderDisplay && sidebarContainer) {
+        sidebarTurnOrderDisplay = new TurnOrderDisplay('sidebar-turn-order-container');
+    }
+
+    if (turnOrderDisplay) turnOrderDisplay.update(seq, idx, activePhase);
+    if (sidebarTurnOrderDisplay) sidebarTurnOrderDisplay.update(seq, idx, activePhase);
 }
 
 async function renderPlayerCards() {
@@ -907,10 +1134,10 @@ async function renderPlayerCards() {
     if (!playerCardsInitialized) {
         initPlayerCards();
     }
-    
-    // Calculate scores if in scoring mode or game over
-    const scores = (inScoring || gameOver) ? calculateScores() : {};
-    
+
+    // Calculate scores if in scoring mode or finished
+    const scores = (isScoring() || isFinished()) ? calculateScores() : {};
+
     // Fetch display names for all seated players (non-blocking for UI)
     const namePromises = [];
     requiredSeats.forEach(playerNum => {
@@ -928,40 +1155,33 @@ async function renderPlayerCards() {
             );
         }
     });
-    
+
     // Update all cards in both containers
     requiredSeats.forEach(playerNum => {
         updatePlayerCard(playerNum, 'sidebar', scores);
         updatePlayerCard(playerNum, 'top', scores);
     });
-    
+
     // Wait for name fetches to complete
     await Promise.all(namePromises);
 }
 
 // Populate a game controls container with the appropriate buttons/status
-// Only one of these is shown at a time (priority order):
-// 1. Game Over message
-// 2. Start Game button (host only)
-// 3. Waiting for host message
-// 4. Scoring mode UI (accept/reject buttons)
-// 5. Undo to here button (when viewing history)
-// 6. Go to Scoring button (when it's your turn)
 function populateGameControls(container) {
     if (!container) return;
-    
     container.innerHTML = '';
-    
-    if (gameOver) {
-        // Game over - show final status
+
+    if (isFinished()) {
         const status = document.createElement('div');
         status.className = 'game-status game-over-status';
         status.textContent = 'Game Over';
         container.appendChild(status);
-    } else if (isHost() && !gameStarted) {
+    } else if (isHost() && isLobby()) {
+        const filled = allSeatsFilled();
         const startBtn = document.createElement('button');
         startBtn.className = 'btn-primary start-game-btn';
-        startBtn.textContent = 'Start Game';
+        startBtn.textContent = filled ? 'Start Game' : 'Waiting for players...';
+        startBtn.disabled = !filled;
         startBtn.onclick = startGame;
         container.appendChild(startBtn);
     } else if (!gameLoaded) {
@@ -969,20 +1189,17 @@ function populateGameControls(container) {
         status.className = 'game-status';
         status.textContent = 'Loading game...';
         container.appendChild(status);
-    } else if (!gameStarted) {
+    } else if (isLobby()) {
         const status = document.createElement('div');
         status.className = 'game-status';
         status.textContent = 'Waiting for host to start...';
         container.appendChild(status);
-    } else if (inScoring) {
-        // Scoring mode UI - accept and back buttons side by side
+    } else if (isScoring()) {
         const btnContainer = document.createElement('div');
         btnContainer.className = 'scoring-buttons';
-        
-        // Accept score button (only if seated)
+
         if (mySeat !== null) {
-            const hasAccepted = acceptedScores[mySeat] === true;
-            
+            const hasAccepted = request?.[RQ_AGREES]?.[mySeat] === true;
             const acceptBtn = document.createElement('button');
             acceptBtn.className = 'btn-primary accept-score-btn';
             acceptBtn.textContent = hasAccepted ? 'Accepted ✓' : 'Accept Score';
@@ -992,20 +1209,18 @@ function populateGameControls(container) {
             }
             btnContainer.appendChild(acceptBtn);
         }
-        
+
         const exitBtn = document.createElement('button');
         exitBtn.className = 'btn-secondary exit-scoring-btn';
         exitBtn.textContent = 'Back to Game';
         exitBtn.onclick = exitScoring;
         btnContainer.appendChild(exitBtn);
-        
+
         container.appendChild(btnContainer);
     } else {
-        // Game in progress
-        // Check if we should show Undo button (viewing history)
         const atEnd = viewIndex >= liveMoves.length;
-        const canUndo = mySeat !== null && isViewingHistory && !atEnd && gameStarted;
-        
+        const canUndo = (mySeat !== null || debugMode) && isViewingHistory && !atEnd && isPlaying();
+
         if (canUndo) {
             const undoBtn = document.createElement('button');
             undoBtn.className = 'undo-btn';
@@ -1013,14 +1228,45 @@ function populateGameControls(container) {
             undoBtn.onclick = undoToCurrentPosition;
             container.appendChild(undoBtn);
         } else if (canMakeMove()) {
-            // Show scoring button when it's your turn and viewing current position
+            // Power buttons (only when in main sequence)
+            const effectiveSeat = mySeat !== null ? mySeat : (debugMode ? board.currentTurn.player : null);
+            if (board.getActivePhase() === 'main' && effectiveSeat !== null) {
+                const playerPowers = board.powers[effectiveSeat] || [];
+                for (let pwIdx = 0; pwIdx < playerPowers.length; pwIdx++) {
+                    const pw = playerPowers[pwIdx];
+                    if (pw.usesLeft > 0) {
+                        const actionBtn = document.createElement('button');
+                        actionBtn.className = 'btn-secondary use-action-btn';
+                        actionBtn.onclick = () => triggerAndSubmitPower(effectiveSeat, pwIdx);
+                        drawActionPreviewCanvas(actionBtn, pw.sequence, 20);
+                        const usesLabel = document.createElement('span');
+                        usesLabel.textContent = `×${pw.usesLeft}`;
+                        actionBtn.appendChild(usesLabel);
+                        container.appendChild(actionBtn);
+                    }
+                }
+            }
+
+            const passBtn = document.createElement('button');
+            passBtn.className = 'btn-secondary pass-btn';
+            passBtn.textContent = 'Pass';
+            passBtn.onclick = addPass;
+            container.appendChild(passBtn);
+
+            if (mySeat !== null && !board?.eliminatedPlayers.has(mySeat)) {
+                const resignBtn = document.createElement('button');
+                resignBtn.className = 'btn-secondary resign-btn';
+                resignBtn.textContent = 'Resign';
+                resignBtn.onclick = resign;
+                container.appendChild(resignBtn);
+            }
+
             const scoringBtn = document.createElement('button');
             scoringBtn.className = 'btn-secondary enter-scoring-btn';
             scoringBtn.textContent = 'Go to Scoring';
             scoringBtn.onclick = enterScoring;
             container.appendChild(scoringBtn);
         }
-        // If neither condition is met, container stays empty (which is fine)
     }
 }
 
@@ -1079,6 +1325,7 @@ function renderHistoryControls() {
 
 function createSketch() {
     return (p) => {
+
         p.setup = function() {
             // Use default pixel density for crisp rendering on high-DPI screens
             const container = document.getElementById('board-container');
@@ -1109,25 +1356,14 @@ function createSketch() {
         };
         
         function initializeBoard() {
-            const { boardType, boardWidth, boardHeight, presetStones, pregameSequence, turnCycle } = gameSettings;
-
-            board = Board.fromSettings({
-                boardType: boardType || 'grid',
-                boardWidth: boardWidth || 9,
-                boardHeight: boardHeight || 9,
-                pregameSequence: pregameSequence || '',
-                turnCycle: turnCycle,
-                presetStones: presetStones
-            });
-
+            board = Board.fromSettings(gameSettings);
             board.calculateTransform(p.width, p.height);
-            
-            // If we're already in scoring or game over (page reload), compute the canonical index map
-            if (inScoring || gameOver) {
+
+            if (isScoring() || isFinished()) {
                 canonicalIndexMap = board.computeCanonicalIndexMap();
                 territory = board.calculateTerritory(deadChains, canonicalIndexMap);
             }
-            
+
             p.redraw();
         }
 
@@ -1135,53 +1371,74 @@ function createSketch() {
             p.background(255, 193, 140);
 
             if (board) {
-                const showScoring = inScoring || gameOver;
-                board.draw(p, showScoring ? deadChains : null, showScoring ? canonicalIndexMap : null, showScoring ? territory : null);
-                // Only show ghost stone if it's my turn and not in scoring/game over
-                if (hoverNode && canMakeMove() && !inScoring && !gameOver) {
-                    board.drawGhostStone(hoverNode, board.currentMove.to, p);
+                const showScoring = isScoring() || isFinished();
+                const viewer = mySeat !== null ? mySeat : null;
+                board.draw(p, showScoring ? deadChains : null, showScoring ? canonicalIndexMap : null, showScoring ? territory : null, viewer);
+
+                if (hoverNode && canMakeMove() && !showScoring) {
+                    board.drawGhostStoneAt(p, hoverNode, board.currentTurn.color, board.currentTurn);
                 }
             }
         };
 
         p.mouseMoved = function() {
-            if (board) {
-                // In scoring mode (not game over) and viewing latest, hover over any stone
-                // Otherwise only if it's my turn (canMakeMove includes !isViewingHistory check)
-                let newHover;
-                if (inScoring && !gameOver && !isViewingHistory) {
-                    newHover = board.findHover(p.mouseX, p.mouseY, false);
-                    // Only hover over actual stones, not empty intersections
-                    if (newHover && newHover.color <= 0) newHover = null;
-                } else if (!gameOver) {
-                    newHover = canMakeMove() ? board.findHover(p.mouseX, p.mouseY) : null;
-                } else {
-                    newHover = null;
+            if (!board) return;
+            let newHover = null;
+            if (isScoring() && !isFinished() && !isViewingHistory) {
+                newHover = board.findHover(p.mouseX, p.mouseY);
+                if (newHover && newHover.color <= 0) newHover = null;
+            } else if (!isFinished() && canMakeMove()) {
+                newHover = board.findHover(p.mouseX, p.mouseY);
+                if (newHover) {
+                    const viewer = mySeat !== null ? mySeat : null;
+                    const turnColor = board.currentTurn.color;
+                    if (turnColor === 0) {
+                        // Color 0 = remove: only legal on occupied (visible) nodes
+                        const visiblyOccupied = newHover.color > 0
+                            && (newHover.onlyVisibleTo === null || newHover.onlyVisibleTo === viewer);
+                        if (!visiblyOccupied) newHover = null;
+                    } else {
+                        // Normal move: only legal on empty nodes (hidden stones treated as empty)
+                        const hasHidden = viewer !== null && board.hasHiddenStones(viewer);
+                        const visiblyOccupied = newHover.color !== 0
+                            && (newHover.onlyVisibleTo === null || newHover.onlyVisibleTo === viewer);
+                        if (hasHidden ? visiblyOccupied : newHover.color !== 0) newHover = null;
+                    }
                 }
-                if (hoverNode !== newHover) {
-                    hoverNode = newHover;
-                    p.redraw();
-                }
+            }
+            if (hoverNode !== newHover) {
+                hoverNode = newHover;
+                p.redraw();
             }
         };
 
         function handlePress(x, y) {
-            if (!board || gameOver) return;
-            
-            // Don't allow any actions when viewing history
+            if (!board || isFinished()) return;
             if (isViewingHistory) return;
-            
-            if (inScoring) {
-                // In scoring mode, toggle dead state of clicked chain
-                const clickedNode = board.findHover(x, y, false);
+
+            if (isScoring()) {
+                const clickedNode = board.findHover(x, y);
                 if (clickedNode && clickedNode.color > 0) {
                     toggleDeadChain(clickedNode);
                 }
             } else if (canMakeMove()) {
-                // Find the node at touch/click position
                 const clickedNode = board.findHover(x, y);
                 if (clickedNode) {
-                    addMove(clickedNode.i, board.currentMove.to);
+                    const viewer = mySeat !== null ? mySeat : null;
+                    const isHiddenFromViewer = clickedNode.color !== 0
+                        && clickedNode.onlyVisibleTo !== null
+                        && clickedNode.onlyVisibleTo !== viewer;
+                    if (isHiddenFromViewer) {
+                        revealStone(clickedNode.i);
+                    } else {
+                        const turn = board.currentTurn;
+                        let color = turn.color;
+                        if (turn.traitorColor !== undefined) {
+                            const pct = turn.traitorPercentage ?? 10;
+                            if (Math.random() * 100 < pct) color = turn.traitorColor;
+                        }
+                        addMove(clickedNode.i, color, turn.color);
+                    }
                     hoverNode = null;
                     p.redraw();
                 }
@@ -1220,9 +1477,11 @@ function createSketch() {
 
         p.keyPressed = function() {
             if (p.key === 'd') {
-                console.log('queue:', board.queue);
+                console.log('phase:', board.getActivePhase());
+                console.log('activeSequence:', board.getActiveSequence());
+                console.log('activeIndex:', board.getActiveIndex());
                 console.log('order:', board.order);
-                console.log('currentMove:', board.currentMove);
+                console.log('currentTurn:', board.currentTurn);
                 console.log('seats:', seats);
                 console.log('mySeat:', mySeat);
             }
@@ -1247,4 +1506,63 @@ function createSketch() {
             }
         };
     };
+}
+
+// Clock helper functions
+
+function getDisplayTime(playerNum) {
+    if (!(playerNum in clocks)) return null;
+    const val = clocks[playerNum];
+    if (val >= 1e12) return Math.max(0, val - serverNow());
+    return val;
+}
+
+function formatTime(ms) {
+    if (ms <= 0) ms = 0;
+    const totalSeconds = Math.floor(ms / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const mins = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+    if (hours > 0) {
+        return `${hours}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    }
+    return `${mins}:${String(secs).padStart(2, '0')}`;
+}
+
+function startClockInterval() {
+    if (clockInterval) clearInterval(clockInterval);
+    clockInterval = setInterval(() => {
+        if (!isPlaying()) return;
+        renderPlayerCards();
+        // Timeout check: report loss by time for any player whose clock has expired.
+        // Own clock is reported immediately; other players' clocks require a 5-second
+        // buffer to account for network lag from an offline timed-out client.
+        if (!isViewingHistory && board) {
+            for (const p of requiredSeats) {
+                if (board.eliminatedPlayers.has(p)) continue;
+                if (!gameSettings?.timeSettings?.[p]) continue;
+                const val = clocks[p];
+                if (val === undefined || val === null || val < 1e12) continue; // paused
+                const remaining = val - serverNow();
+                const isOwn = p === mySeat;
+                const threshold = isOwn ? 0 : -5000;
+                // Only seated clients report other players' timeouts
+                if (remaining <= threshold && (isOwn || mySeat !== null)) {
+                    addElimination(p, 'timeout');
+                    break;
+                }
+            }
+        }
+    }, 200);
+}
+
+function computeTimeLeft(playerNum) {
+    if (!gameSettings.timeSettings?.[playerNum]) return null;
+    const ts = gameSettings.timeSettings[playerNum];
+    const clockVal = clocks[playerNum];
+    if (clockVal === undefined || clockVal === null) return null;
+    let remaining = clockVal >= 1e12 ? Math.max(0, clockVal - serverNow()) : clockVal;
+    remaining += ts.increment || 0;
+    if (ts.cap > 0) remaining = Math.min(remaining, ts.cap);
+    return remaining;
 }

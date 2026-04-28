@@ -1,10 +1,9 @@
 // Game setup page script
 let previewBoard = null;
 let boardType = 'grid';
-let boardWidth = 9;
-let boardHeight = 9;
-let pregameSequence = '';
-let turnCycle = '101,202';
+let boardSize = 9;
+let variantEntries = [];   // ordered list of { id, type, element, widget?, ... }
+let variantCounter = 0;
 let selectedColor = 1; // Default to black
 let hoverNode = null;
 let hoverPickerColor = null;
@@ -24,84 +23,287 @@ const pickerSelectionBorder = 4;
 
 // Board type configuration
 const boardTypeConfig = {
-    grid: { defaultSize: '9x9', supportsRectangular: true, min: 2, max: 25 },
-    star: { defaultSize: '5', supportsRectangular: false, min: 2, max: 9 },
-    dodecagon: { defaultSize: '4', supportsRectangular: false, min: 2, max: 7 },
-    rotatedGrid: { defaultSize: '9', supportsRectangular: true, min: 2, max: 19 },
-    hexagon: { defaultSize: '6', supportsRectangular: false, min: 2, max: 11 }
+    grid:        { defaultSize: '9',  min: 2, max: 25 },
+    star:        { defaultSize: '5',  min: 2, max: 9  },
+    dodecagon:   { defaultSize: '4',  min: 2, max: 7  },
+    rotatedGrid: { defaultSize: '9',  min: 2, max: 19 },
+    hexagon:     { defaultSize: '6',  min: 2, max: 11 },
 };
 
-initSetupPage();
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initSetupPage);
+} else {
+    initSetupPage();
+}
 
 function initSetupPage() {
-    // Setup tab buttons
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.addEventListener('click', () => switchTab(btn.dataset.tab));
-    });
-    
-    // Setup form listeners
     document.getElementById('board-type').addEventListener('change', onBoardTypeChange);
     document.getElementById('board-size').addEventListener('input', validateAndUpdateBoardSize);
-    document.getElementById('pregame-sequence').addEventListener('input', validatePregameSequence);
-    document.getElementById('turn-cycle').addEventListener('input', validateTurnCycle);
     document.getElementById('game-setup-form').addEventListener('submit', handleCreateGame);
-    
-    // Setup spinner buttons
     document.getElementById('size-decrement').addEventListener('click', () => adjustBoardSize(-1));
     document.getElementById('size-increment').addEventListener('click', () => adjustBoardSize(1));
-    
-    // Initialize p5 sketches
+
+    // Quick-size buttons
+    document.querySelectorAll('.quick-size-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.getElementById('board-type').value = 'grid';
+            document.getElementById('board-size').value = btn.dataset.size;
+            boardType = 'grid';
+            validateAndUpdateBoardSize();
+        });
+    });
+
     initBoardSketch();
     initPickerSketch();
-    
-    // Sync JS state with actual form values (browser may restore previous values)
+
+    // Add-variant button / menu
+    const addBtn = document.getElementById('add-variant-btn');
+    const addMenu = document.getElementById('add-variant-menu');
+    addBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const open = addMenu.style.display !== 'none';
+        addMenu.style.display = open ? 'none' : '';
+    });
+    addMenu.querySelectorAll('[data-type]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            addVariant(btn.dataset.type);
+            addMenu.style.display = 'none';
+        });
+    });
+    document.addEventListener('mousedown', (e) => {
+        if (!addBtn.contains(e.target) && !addMenu.contains(e.target)) {
+            addMenu.style.display = 'none';
+        }
+    });
+
     boardType = document.getElementById('board-type').value;
-    
-    // Validate initial values and show preview
     validateBoardSize();
     updateSpinnerState();
     updatePreview();
-    
-    // Handle window resize for responsive layout
+
     window.addEventListener('resize', handleResize);
-    
-    // Call resize multiple times during page load to catch layout shifts
-    // First call immediately
     handleResize();
-    // Second call after rAF (after first paint)
     requestAnimationFrame(() => {
         handleResize();
-        // Third call after another rAF (after styles/layout stabilize)
-        requestAnimationFrame(() => {
-            handleResize();
-        });
+        requestAnimationFrame(() => { handleResize(); });
     });
 }
 
-function switchTab(tabName) {
-    // Update tab buttons
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.tab === tabName);
-    });
-    
-    // Update panels
-    document.querySelectorAll('.setup-panel').forEach(panel => {
-        panel.classList.toggle('active', panel.dataset.panel === tabName);
-    });
-    
-    // Redraw canvases when switching to board tab
-    if (tabName === 'board') {
-        // Use requestAnimationFrame to ensure layout is complete before resizing
-        requestAnimationFrame(() => {
-            handleResize();
-        });
+function addVariant(type) {
+    const id = ++variantCounter;
+    const entry = { id, type };
+    variantEntries.push(entry);
+
+    const typeLabels = {
+        'turn-order': 'Turn Order',
+        'setup':      'Setup Sequence',
+        'power':      'Power',
+        'clock':      'Clock',
+        'komi':       'Komi',
+        'legalitycheck': 'Forbidden Chain-Size',
+    };
+
+    const bodyId = `variant-body-${id}`;
+    const el = document.createElement('div');
+    el.className = 'variant-entry';
+    el.dataset.id = id;
+    el.innerHTML = `
+        <div class="variant-entry-header">
+            <span class="variant-type-label">${typeLabels[type]}</span>
+            <div class="variant-entry-actions">
+                <button type="button" class="variant-move-btn" title="Move up">↑</button>
+                <button type="button" class="variant-move-btn" title="Move down">↓</button>
+                <button type="button" class="btn-remove-small variant-delete">✕</button>
+            </div>
+        </div>
+        <div class="variant-entry-body" id="${bodyId}"></div>
+    `;
+    document.getElementById('variants-list').appendChild(el);
+    entry.element = el;
+
+    const moveBtns = el.querySelectorAll('.variant-move-btn');
+    moveBtns[0].addEventListener('click', () => moveVariant(id, -1));
+    moveBtns[1].addEventListener('click', () => moveVariant(id, 1));
+    el.querySelector('.variant-delete').addEventListener('click', () => removeVariant(id));
+
+    buildVariantBody(entry, bodyId);
+}
+
+function buildVariantBody(entry, containerId) {
+    const container = document.getElementById(containerId);
+    const id = entry.id;
+
+    switch (entry.type) {
+        case 'turn-order': {
+            const widgetId = `variant-widget-${id}`;
+            container.innerHTML = `<div id="${widgetId}" class="move-list-container"></div>`;
+            entry.widget = new MoveListWidget(widgetId, {
+                allowEmpty: false,
+                defaultMove: { player: 1, color: 1 },
+            });
+            entry.widget.setMoves([{ player: 1, color: 1 }, { player: 2, color: 2 }]);
+            break;
+        }
+        case 'setup': {
+            const widgetId = `variant-widget-${id}`;
+            const repeatId = `variant-repeat-${id}`;
+            container.innerHTML = `
+                <div class="setup-entry-row">
+                    <div id="${widgetId}" class="move-list-container"></div>
+                    <label class="setup-entry-repeat">Repeat <input type="number" id="${repeatId}" min="1" value="1"></label>
+                </div>
+            `;
+            entry.widget = new MoveListWidget(widgetId, {
+                allowEmpty: true,
+                defaultMove: { player: 1, color: 1 },
+            });
+            entry.repeatInputId = repeatId;
+            break;
+        }
+        case 'power': {
+            const widgetId       = `variant-widget-${id}`;
+            const usesId         = `variant-uses-${id}`;
+            const playerSelectId = `variant-power-player-${id}`;
+            container.innerHTML = `
+                <div class="setup-entry-row">
+                    <div id="${widgetId}" class="move-list-container"></div>
+                    <label class="setup-entry-repeat">Uses <input type="number" id="${usesId}" min="1" value="1"></label>
+                    <label class="setup-entry-repeat">Player
+                        <select id="${playerSelectId}">
+                            <option value="1">1</option>
+                            <option value="2">2</option>
+                            <option value="3">3</option>
+                            <option value="4">4</option>
+                            <option value="5">5</option>
+                        </select>
+                    </label>
+                </div>
+            `;
+            entry.widget = new MoveListWidget(widgetId, {
+                allowEmpty: true,
+                defaultMove: { player: 1, color: 1 },
+            });
+            entry.usesInputId    = usesId;
+            entry.playerSelectId = playerSelectId;
+            break;
+        }
+        case 'clock': {
+            const mainValId      = `variant-main-val-${id}`;
+            const mainUnitId     = `variant-main-unit-${id}`;
+            const incValId       = `variant-inc-val-${id}`;
+            const incUnitId      = `variant-inc-unit-${id}`;
+            const playerSelectId = `variant-clock-player-${id}`;
+
+            // Default: 5m + 10s. If a previous clock exists, copy its values.
+            const prevClock = [...variantEntries].reverse().find(e => e.type === 'clock' && e.id !== id);
+            const defMainVal  = prevClock ? document.getElementById(prevClock.mainValId)?.value  ?? '5' : '5';
+            const defMainUnit = prevClock ? document.getElementById(prevClock.mainUnitId)?.value ?? '60000' : '60000';
+            const defIncVal   = prevClock ? document.getElementById(prevClock.incValId)?.value   ?? '10' : '10';
+            const defIncUnit  = prevClock ? document.getElementById(prevClock.incUnitId)?.value  ?? '1000' : '1000';
+
+            container.innerHTML = `
+                <div class="variant-clock-row">
+                    <select class="variant-player-select" id="${playerSelectId}">
+                        <option value="all">All players</option>
+                        <option value="1">Player 1</option>
+                        <option value="2">Player 2</option>
+                        <option value="3">Player 3</option>
+                        <option value="4">Player 4</option>
+                        <option value="5">Player 5</option>
+                    </select>
+                    <div class="time-settings-row">
+                        <input type="number" class="time-num" id="${mainValId}" min="0" value="${defMainVal}">
+                        <select class="time-unit" id="${mainUnitId}">
+                            <option value="1000" ${defMainUnit==='1000'?'selected':''}>s</option>
+                            <option value="60000" ${defMainUnit==='60000'?'selected':''}>m</option>
+                            <option value="3600000" ${defMainUnit==='3600000'?'selected':''}>h</option>
+                            <option value="86400000" ${defMainUnit==='86400000'?'selected':''}>d</option>
+                        </select>
+                        <span class="time-plus">+</span>
+                        <input type="number" class="time-num" id="${incValId}" min="0" value="${defIncVal}">
+                        <select class="time-unit" id="${incUnitId}">
+                            <option value="1000" ${defIncUnit==='1000'?'selected':''}>s</option>
+                            <option value="60000" ${defIncUnit==='60000'?'selected':''}>m</option>
+                            <option value="3600000" ${defIncUnit==='3600000'?'selected':''}>h</option>
+                            <option value="86400000" ${defIncUnit==='86400000'?'selected':''}>d</option>
+                        </select>
+                    </div>
+                </div>
+            `;
+            entry.mainValId      = mainValId;
+            entry.mainUnitId     = mainUnitId;
+            entry.incValId       = incValId;
+            entry.incUnitId      = incUnitId;
+            entry.playerSelectId = playerSelectId;
+            break;
+        }
+        case 'komi': {
+            const komiInputId    = `variant-komi-val-${id}`;
+            const playerSelectId = `variant-komi-player-${id}`;
+            container.innerHTML = `
+                <div class="variant-komi-row">
+                    <select class="variant-player-select" id="${playerSelectId}">
+                        <option value="1">Player 1</option>
+                        <option value="2" selected>Player 2</option>
+                        <option value="3">Player 3</option>
+                        <option value="4">Player 4</option>
+                        <option value="5">Player 5</option>
+                    </select>
+                    <input type="number" class="variant-komi-input" id="${komiInputId}" step="0.5" value="7">
+                </div>
+            `;
+            entry.komiInputId    = komiInputId;
+            entry.playerSelectId = playerSelectId;
+            break;
+        }
+        case 'legalitycheck': {
+            const sizeInputId    = `variant-lc-size-${id}`;
+            const playerSelectId = `variant-lc-player-${id}`;
+            container.innerHTML = `
+                <div class="variant-clock-row">
+                    <select class="variant-player-select" id="${playerSelectId}">
+                        <option value="all">All players</option>
+                        <option value="1">Player 1</option>
+                        <option value="2">Player 2</option>
+                        <option value="3">Player 3</option>
+                        <option value="4">Player 4</option>
+                        <option value="5">Player 5</option>
+                    </select>
+                    <label class="setup-entry-repeat">Forbidden size
+                        <input type="number" id="${sizeInputId}" min="1" value="4">
+                    </label>
+                </div>
+            `;
+            entry.sizeInputId    = sizeInputId;
+            entry.playerSelectId = playerSelectId;
+            break;
+        }
     }
+}
+
+function moveVariant(id, direction) {
+    const idx = variantEntries.findIndex(e => e.id === id);
+    if (idx === -1) return;
+    const newIdx = idx + direction;
+    if (newIdx < 0 || newIdx >= variantEntries.length) return;
+    [variantEntries[idx], variantEntries[newIdx]] = [variantEntries[newIdx], variantEntries[idx]];
+    const list = document.getElementById('variants-list');
+    for (const entry of variantEntries) list.appendChild(entry.element);
+}
+
+function removeVariant(id) {
+    const idx = variantEntries.findIndex(e => e.id === id);
+    if (idx === -1) return;
+    const entry = variantEntries[idx];
+    if (entry.widget) entry.widget.destroy();
+    entry.element.remove();
+    variantEntries.splice(idx, 1);
 }
 
 function handleResize() {
     const container = document.getElementById('preview-container');
     if (!container || !boardP5) return;
-    
+
     // Get the container's available space
     const rect = container.getBoundingClientRect();
     
@@ -312,20 +514,13 @@ function initPickerSketch() {
                     p.circle(x, y, pickerStoneSize + 4);
                 }
                 
-                // Draw the stone or delete icon
+                // Draw the stone
                 if (color === -1) {
-                    // Draw delete "X" icon
-                    p.fill(255);
-                    p.stroke(200);
+                    // Board-colored stone (represents removing a stone)
+                    p.fill(...stoneColors[-1]);
+                    p.stroke(...strokeColors[-1]);
                     p.strokeWeight(2);
                     p.circle(x, y, pickerStoneSize - 4);
-                    
-                    // Draw X
-                    p.stroke(100);
-                    p.strokeWeight(3);
-                    const offset = pickerStoneSize / 5;
-                    p.line(x - offset, y - offset, x + offset, y + offset);
-                    p.line(x - offset, y + offset, x + offset, y - offset);
                 } else if (color >= 1 && color <= 5) {
                     // Draw stone using board.js colors
                     p.fill(...stoneColors[color]);
@@ -393,105 +588,40 @@ function onBoardTypeChange() {
 }
 
 function updatePreview() {
-    // Create new board based on settings using the unified factory
-    previewBoard = Board.fromSettings({
-        boardType,
-        boardWidth,
-        boardHeight
-    });
-    
-    if (boardP5) {
-        boardP5.redraw();
-    }
+    previewBoard = Board.fromSettings({ boardType, boardSize });
+    if (boardP5) boardP5.redraw();
 }
 
 function parseBoardSize(value, currentBoardType) {
     value = value.trim();
-    const config = boardTypeConfig[currentBoardType] || { supportsRectangular: false, min: 2, max: 25 };
+    const config = boardTypeConfig[currentBoardType] || { min: 2, max: 25 };
     const { min, max } = config;
-    
-    if (!value) {
-        throw new Error('Board size is required');
-    }
-    
-    // Check for WxH format (e.g., "19x13" or "19X13")
-    const wxhMatch = value.match(/^(\d+)\s*[xX]\s*(\d+)$/);
-    if (wxhMatch) {
-        if (!config.supportsRectangular) {
-            throw new Error(`${currentBoardType} boards don't support WxH format`);
-        }
-        
-        const width = parseInt(wxhMatch[1], 10);
-        const height = parseInt(wxhMatch[2], 10);
-        
-        if (width < min || width > max) {
-            throw new Error(`Width ${width} out of range (${min}-${max})`);
-        }
-        if (height < min || height > max) {
-            throw new Error(`Height ${height} out of range (${min}-${max})`);
-        }
-        
-        return { width, height };
-    }
-    
-    // Check for single number (square board)
+    if (!value) throw new Error('Board size is required');
     const singleMatch = value.match(/^(\d+)$/);
     if (singleMatch) {
         const size = parseInt(singleMatch[1], 10);
-        
-        if (size < min || size > max) {
-            throw new Error(`Size ${size} out of range (${min}-${max})`);
-        }
-        
-        return { width: size, height: size };
+        if (size < min || size > max) throw new Error(`Size ${size} out of range (${min}\u2013${max})`);
+        return size;
     }
-    
-    throw new Error('Use a number (e.g. "19") or WxH format (e.g. "19x13")');;;
+    throw new Error('Use a number (e.g. "9")');
 }
 
 function adjustBoardSize(delta) {
     const input = document.getElementById('board-size');
-    const value = input.value.trim();
     const config = boardTypeConfig[boardType] || { min: 2, max: 25 };
     const { min, max } = config;
-    
-    // Check for WxH format
-    const wxhMatch = value.match(/^(\d+)\s*[xX]\s*(\d+)$/);
-    if (wxhMatch) {
-        let width = parseInt(wxhMatch[1], 10) + delta;
-        let height = parseInt(wxhMatch[2], 10) + delta;
-        
-        // Clamp to valid range
-        width = Math.max(min, Math.min(max, width));
-        height = Math.max(min, Math.min(max, height));
-        
-        input.value = `${width}x${height}`;
-    } else {
-        // Single number format
-        const singleMatch = value.match(/^(\d+)$/);
-        if (singleMatch) {
-            let size = parseInt(singleMatch[1], 10) + delta;
-            size = Math.max(min, Math.min(max, size));
-            input.value = size.toString();
-        }
+    const current = parseInt(input.value.trim(), 10);
+    if (!isNaN(current)) {
+        input.value = Math.max(min, Math.min(max, current + delta)).toString();
     }
-    
     validateAndUpdateBoardSize();
 }
 
 function updateSpinnerState() {
     const config = boardTypeConfig[boardType] || { min: 2, max: 25 };
     const { min, max } = config;
-    
-    const decrementBtn = document.getElementById('size-decrement');
-    const incrementBtn = document.getElementById('size-increment');
-    
-    // Check current values against min/max
-    const atMin = boardWidth <= min && boardHeight <= min;
-    const atMax = boardWidth >= max || boardHeight >= max;
-    
-    decrementBtn.disabled = atMin;
-    incrementBtn.disabled = atMax;
+    document.getElementById('size-decrement').disabled = boardSize <= min;
+    document.getElementById('size-increment').disabled = boardSize >= max;
 }
 
 function validateAndUpdateBoardSize() {
@@ -506,63 +636,10 @@ function validateAndUpdateBoardSize() {
 function validateBoardSize() {
     const input = document.getElementById('board-size');
     const errorSpan = document.getElementById('board-size-error');
-    
     try {
-        const { width, height } = parseBoardSize(input.value, boardType);
-        boardWidth = width;
-        boardHeight = height;
+        boardSize = parseBoardSize(input.value, boardType);
         errorSpan.textContent = '';
         input.classList.remove('input-error');
-        return true;
-    } catch (e) {
-        errorSpan.textContent = e.message;
-        input.classList.add('input-error');
-        return false;
-    }
-}
-
-function validatePregameSequence() {
-    const input = document.getElementById('pregame-sequence');
-    const errorSpan = document.getElementById('pregame-sequence-error');
-    const value = input.value.trim();
-    
-    // Empty is valid for pregame sequence
-    if (!value) {
-        errorSpan.textContent = '';
-        input.classList.remove('input-error');
-        pregameSequence = '';
-        return true;
-    }
-    
-    try {
-        orderFromString(value);
-        errorSpan.textContent = '';
-        input.classList.remove('input-error');
-        pregameSequence = value;
-        return true;
-    } catch (e) {
-        errorSpan.textContent = e.message;
-        input.classList.add('input-error');
-        return false;
-    }
-}
-
-function validateTurnCycle() {
-    const input = document.getElementById('turn-cycle');
-    const errorSpan = document.getElementById('turn-cycle-error');
-    const value = input.value.trim();
-    
-    if (!value) {
-        errorSpan.textContent = 'Turn cycle is required';
-        input.classList.add('input-error');
-        return false;
-    }
-    
-    try {
-        orderFromString(value);
-        errorSpan.textContent = '';
-        input.classList.remove('input-error');
-        turnCycle = value;
         return true;
     } catch (e) {
         errorSpan.textContent = e.message;
@@ -573,61 +650,138 @@ function validateTurnCycle() {
 
 function handleCreateGame(event) {
     event.preventDefault();
-    
+
     if (!currentUser) {
         alert('Please wait for authentication...');
         return;
     }
-    
-    // Validate all inputs before creating game
-    const isBoardSizeValid = validateBoardSize();
-    const isPregameValid = validatePregameSequence();
-    const isTurnCycleValid = validateTurnCycle();
-    
-    if (!isBoardSizeValid || !isPregameValid || !isTurnCycleValid) {
-        return;
-    }
-    
-    // Collect preset stones from the board preview
-    const presetStones = [];
-    if (previewBoard) {
-        previewBoard.nodes.forEach(node => {
-            if (node.color) {
-                presetStones.push({
-                    i: node.i,
-                    c: node.color
-                });
+
+    if (!validateBoardSize()) return;
+
+    let mainSequence = [{ player: 1, color: 1 }, { player: 2, color: 2 }];
+    const setupTurns = [];
+    const powers = {};
+    const komi = {};
+    const timeSettings = {};
+    const legalityChecks = [];
+
+    for (const entry of variantEntries) {
+        switch (entry.type) {
+            case 'turn-order': {
+                const moves = entry.widget.getMoves();
+                if (moves.length > 0) mainSequence = moves;
+                break;
             }
-        });
+            case 'setup': {
+                const moves = entry.widget.getMoves();
+                const repeat = Math.max(1, parseInt(document.getElementById(entry.repeatInputId).value, 10) || 1);
+                if (moves.length > 0) setupTurns.push({ sequence: moves, repeat });
+                break;
+            }
+            case 'power': {
+                const p = parseInt(document.getElementById(entry.playerSelectId).value, 10);
+                const moves = entry.widget.getMoves();
+                const uses = Math.max(1, parseInt(document.getElementById(entry.usesInputId).value, 10) || 1);
+                if (moves.length > 0) {
+                    if (!powers[p]) powers[p] = [];
+                    powers[p].push({ sequence: moves, numberOfUses: uses });
+                }
+                break;
+            }
+            case 'clock': {
+                const target = document.getElementById(entry.playerSelectId).value;
+                const maintime = Math.round(
+                    (parseFloat(document.getElementById(entry.mainValId).value) || 0) *
+                    (parseInt(document.getElementById(entry.mainUnitId).value, 10) || 60000)
+                );
+                const increment = Math.round(
+                    (parseFloat(document.getElementById(entry.incValId).value) || 0) *
+                    (parseInt(document.getElementById(entry.incUnitId).value, 10) || 1000)
+                );
+                if (maintime > 0 || increment > 0) {
+                    const players = target === 'all' ? [1, 2, 3, 4, 5] : [parseInt(target, 10)];
+                    for (const p of players) timeSettings[p] = { maintime, increment };
+                }
+                break;
+            }
+            case 'komi': {
+                const p = parseInt(document.getElementById(entry.playerSelectId).value, 10);
+                const val = parseFloat(document.getElementById(entry.komiInputId).value) || 0;
+                if (val !== 0) komi[p] = val;
+                break;
+            }
+            case 'legalitycheck': {
+                const size = Math.max(1, parseInt(document.getElementById(entry.sizeInputId).value, 10) || 4);
+                const target = document.getElementById(entry.playerSelectId).value;
+                const player = target === 'all' ? null : parseInt(target, 10);
+                legalityChecks.push({ type: 'forbiddenChainSize', size, player });
+                break;
+            }
+        }
     }
-    
+
+    // Collect preset stones from the board preview (including color -1 = removed nodes)
+    const setupStones = [];
+    if (previewBoard) {
+        for (const node of previewBoard.nodes) {
+            if (node.color !== 0) setupStones.push({ i: node.i, c: node.color });
+        }
+    }
+
+    // Determine player count from all sequences and power owners
+    const playerNums = new Set();
+    const addFromSeq = (seq) => seq.forEach(t => { if (t.player >= 1 && t.player <= 5) playerNums.add(t.player); });
+    addFromSeq(mainSequence);
+    for (const st of setupTurns) addFromSeq(st.sequence);
+    for (const p of Object.keys(powers)) { const n = parseInt(p); if (n >= 1 && n <= 5) playerNums.add(n); }
+    const numPlayers = playerNums.size > 0 ? Math.max(...playerNums) : 2;
+    const effectivePlayers = Math.max(2, numPlayers);
+
     attemptCreateGame({
         boardType,
-        boardWidth,
-        boardHeight,
-        presetStones,
-        pregameSequence,
-        turnCycle
+        boardSize,
+        players:        effectivePlayers,
+        setupStones:    setupStones.length               ? setupStones    : null,
+        setupTurns:     setupTurns.length                ? setupTurns     : null,
+        mainSequence,
+        powers:         Object.keys(powers).length       ? powers         : null,
+        komi:           Object.keys(komi).length         ? komi           : null,
+        timeSettings:   Object.keys(timeSettings).length ? timeSettings   : null,
+        legalityChecks: legalityChecks.length            ? legalityChecks : null,
     });
 }
 
-function attemptCreateGame(settings) {    
+function attemptCreateGame(settings) {
     const gameId = generateGameId();
     const newGameRef = db.ref(`games/${gameId}`);
-    
+
     newGameRef.once('value')
         .then((snapshot) => {
             if (snapshot.exists()) {
                 console.log(`Game ID ${gameId} already exists, retrying...`);
                 attemptCreateGame(settings);
             } else {
+                const compressed = compressGameSetting(settings);
+
+                // Build initial clocks: each player's maintime stored as paused ms-remaining
+                const initialClocks = {};
+                if (settings.timeSettings) {
+                    for (const [playerNum, ts] of Object.entries(settings.timeSettings)) {
+                        if (ts.maintime > 0) initialClocks[parseInt(playerNum)] = ts.maintime;
+                    }
+                }
+
                 const gameData = {
                     createdBy: currentUser.uid,
                     createdAt: firebase.database.ServerValue.TIMESTAMP,
-                    settings: settings,
-                    moves: {}
+                    ...compressed,
+                    [G_PHASE]:       'lobby',
+                    [G_CLOCKS]:      Object.keys(initialClocks).length ? initialClocks : null,
+                    [G_MOVES]:       null,
+                    [G_REQUEST]:     null,
+                    [G_DEAD_CHAINS]: null,
                 };
-                
+
                 return newGameRef.set(gameData)
                     .then(() => {
                         console.log('Game created:', gameId);
@@ -650,8 +804,12 @@ function generateGameId() {
     return result;
 }
 
+function isLocalhost() {
+    return window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost';
+}
+
 function joinGame(gameId) {
-    if (window.location.href == "http://127.0.0.1:3000/game-setup.html" ) {
+    if (isLocalhost()) {
         window.location.replace(`/game.html?id=${gameId}`);
     } else {
         window.location.replace(`/game/${gameId}`);

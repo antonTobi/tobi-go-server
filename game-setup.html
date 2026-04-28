@@ -21,11 +21,6 @@
             <h1>New Game</h1>
         </header>
         
-        <div class="setup-tabs" id="setup-tabs">
-            <button type="button" class="tab-btn active" data-tab="board">Board</button>
-            <button type="button" class="tab-btn" data-tab="settings">Settings</button>
-        </div>
-        
         <div class="setup-content">
             <!-- Board Panel (Tab 1 on mobile, left side on desktop) -->
             <div class="setup-panel board-panel active" data-panel="board">
@@ -52,6 +47,11 @@
                             <span id="board-size-error" class="error-message"></span>
                         </div>
                     </div>
+                    <div class="quick-size-row">
+                        <button type="button" class="quick-size-btn" data-size="9">9×9</button>
+                        <button type="button" class="quick-size-btn" data-size="13">13×13</button>
+                        <button type="button" class="quick-size-btn" data-size="19">19×19</button>
+                    </div>
                 </div>
                 
                 <div id="preview-container"></div>
@@ -59,21 +59,22 @@
                 <div id="stone-picker-container"></div>
             </div>
             
-            <!-- Settings Panel (Tab 2 on mobile, right side on desktop) -->
-            <div class="setup-panel settings-panel" data-panel="settings">
+            <!-- Variants Panel -->
+            <div class="setup-panel variants-panel active" data-panel="variants">
                 <h2 class="panel-title">Game Settings</h2>
-                
-                <div class="form-group">
-                    <label for="pregame-sequence">Pregame Sequence</label>
-                    <input type="text" id="pregame-sequence" name="pregameSequence" value="" placeholder="">
-                    <span id="pregame-sequence-error" class="error-message"></span>
+                <div id="variants-list" class="variants-list"></div>
+                <div class="add-variant-wrap">
+                    <button type="button" class="btn-secondary btn-add-small" id="add-variant-btn">+ Add</button>
+                    <div class="add-variant-menu" id="add-variant-menu" style="display:none">
+                        <button type="button" data-type="turn-order">Custom turn order</button>
+                        <button type="button" data-type="setup">Setup sequence</button>
+                        <button type="button" data-type="power">Power</button>
+                        <button type="button" data-type="clock">Clock</button>
+                        <button type="button" data-type="komi">Komi</button>
+                        <button type="button" data-type="legalitycheck">Forbidden chain-size</button>
+                    </div>
                 </div>
-
-                <div class="form-group">
-                    <label for="turn-cycle">Turn Cycle</label>
-                    <input type="text" id="turn-cycle" name="turnCycle" value="B, W" placeholder="">
-                    <span id="turn-cycle-error" class="error-message"></span>
-                </div>
+                <span id="main-sequence-error" class="error-message"></span>
             </div>
         </div>
         
@@ -90,8 +91,11 @@
     <!-- Vector utilities -->
     <script src="/vector.js"></script>
     
-    <!-- Board class -->
+    <!-- Vector utilities -->
     <script src="/board.js"></script>
+    
+    <!-- Move list widget -->
+    <script src="/move-list-widget.js"></script>
     
     <!-- Setup script -->
     <script src="/game-setup.js"></script>

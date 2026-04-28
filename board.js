@@ -1,36 +1,46 @@
-// Define colors for stones (1-5: black, white, red, yellow, cobalt)
-// Note: We use "Cobalt" instead of "Blue" to have a unique first ltter for each color.
+// Key constants for all Firebase-serialized objects.
+// Each object type uses its own short keys to save bandwidth.
+// Turn (an instruction in a sequence)
+const T_PLAYER = "p", T_COLOR = "c", T_HIDDEN = "h", T_TRAITOR_COLOR = "t", T_TRAITOR_PCT = "tp";
+// Move record (a move that was made)
+const M_INDEX = "i", M_COLOR = "c", M_TIME_LEFT = "l", M_POWER = "w", M_REVEALED = "r", M_PASS = "s", M_ELIMINATED = "e", M_ELIM_REASON = "er";
+// gameSetting
+const GS_BOARD_TYPE = "bt", GS_BOARD_SIZE = "bs", GS_PLAYERS = "n", GS_SETUP_STONES = "ss";
+const GS_SETUP_TURNS = "st", GS_MAIN_SEQ = "ms", GS_POWERS = "pw", GS_KOMI = "k", GS_TIME_SETTINGS = "ts", GS_LEGALITY_CHECKS = "lc";
+// setupTurns / powers entry
+const ST_SEQUENCE = "q", ST_REPEAT = "r", PW_USES = "u";
+// timeSetting
+const TS_MAINTIME = "m", TS_INCREMENT = "i", TS_CAP = "c";
+// game state
+const G_CLOCKS = "cl", G_MOVES = "mv", G_REQUEST = "rq", G_PHASE = "ph", G_DEAD_CHAINS = "dc";
+// request
+const RQ_TYPE = "t", RQ_MOVE_NUMBER = "n", RQ_AGREES = "a";
+
+// Define colors for stones (1-5: black, white, red, yellow, blue)
 const stoneColors = [
-    null,
+    [255, 193, 140],     // 0: Board color
     [50, 50, 50],        // 1: Black
     [255, 255, 255],     // 2: White
     [220, 50, 50],       // 3: Red
     [250, 250, 20],      // 4: Yellow
-    [50, 100, 220],      // 5: Cobalt
+    [50, 100, 220],      // 5: Blue
 ];
 
-// E: [255, 193, 140],
-
-// B: [50, 50, 50], 
-// W: [255, 255, 255], 
-// R: [255, 0, 0], 
-// Y: [240, 240, 0], 
-// C: [0, 36, 213], 
-// P: [255, 140, 162], 
-// T: [0, 128, 128], 
-// M: [255, 0, 255], 
+stoneColors[-1] = stoneColors[0];
 
 const strokeColors = [
-    null,
+    [64, 48, 35],        // 0: Board line color
     [25, 25, 25],        // 1: Black stroke
     [200, 200, 200],     // 2: White stroke
     [150, 30, 30],       // 3: Red stroke
     [150, 140, 10],      // 4: Yellow stroke
-    [30, 60, 150],       // 5: Cobalt stroke
+    [30, 60, 150],       // 5: Blue stroke
 ];
 
+strokeColors[-1] = strokeColors[0];
+
 const markerColors = [
-    null,
+    [0, 0, 0],
     [255, 255, 255],
     [0, 0, 0],
     [0, 0, 0],
@@ -38,12 +48,10 @@ const markerColors = [
     [0, 0, 0]
 ];
 
-// TODO: try redefining strokeColors and markerColors to be calculated based on stoneColors
-// (this would simplify allowing custom display colors)
-// possibly put boardColor inside the stoneColor array at position zero.
+const boardColor = stoneColors[0]
+const gridColor = strokeColors[0]
 
-const boardColor = [255, 193, 140]
-const gridColor = [64, 48, 35]
+const align = (val) => Math.round(val + 0.5) - 0.5;
 
 class Node {
     constructor(x, y) {
@@ -52,88 +60,114 @@ class Node {
         this.color = 0
         this.hoshi = false
         this.neighbors = []
+        this.onlyVisibleTo = null  // if set, only this player number can see this stone
     }
 }
 
 class Board {
-    // Main factory method that creates a board from a settings object
-    // TODO: merge constructor and fromSettings into a single constructor, get rid of duplicate advanceMoveOrder
+    // Main factory method that creates a board from an uncompressed gameSetting object.
+    // Fields: boardType, boardSize, players, setupStones, setupTurns, mainSequence, powers, komi, timeSettings
     static fromSettings(settings) {
-        const { boardType, boardWidth, boardHeight, pregameSequence, turnCycle, presetStones, coupons } = settings;
+        const {
+            boardType = 'grid',
+            boardSize = 9,
+            setupStones,
+            setupTurns,
+            mainSequence,
+            powers,
+            komi,
+            timeSettings,
+            players,
+            legalityChecks,
+        } = settings;
 
         let board;
         switch (boardType) {
-            case 'grid':
-                board = this.grid(boardWidth, boardHeight);
-                break;
-            case 'star':
-                board = this.star(boardWidth);
-                break;
-            case 'dodecagon':
-                board = this.dodecagon(boardWidth);
-                break;
-            case 'rotatedGrid':
-                board = this.rotatedGrid(boardWidth, boardHeight);
-                break;
-            case 'hexagon':
-                board = this.hexagon(boardWidth);
-                break;
-            default:
-                board = this.grid(9, 9);
+            case 'grid': board = this.grid(boardSize); break;
+            case 'star': board = this.star(boardSize); break;
+            case 'dodecagon': board = this.dodecagon(boardSize); break;
+            case 'rotatedGrid': board = this.rotatedGrid(boardSize); break;
+            case 'hexagon': board = this.hexagon(boardSize); break;
+            default: board = this.grid(9);
         }
 
-        // Apply pregame sequence if provided
-        if (pregameSequence) {
-            board.queue = orderFromString(pregameSequence);
+        // Main sequence (required)
+        if (mainSequence && mainSequence.length) {
+            board.order = mainSequence.map(t => new Turn(t));
         } else {
-            board.queue = []
+            board.order = [new Turn({ player: 1, color: 1 }), new Turn({ player: 2, color: 2 })];
         }
 
-        // Apply turn cycle if provided
-        if (turnCycle) {
-            board.order = orderFromString(turnCycle);
-        }
-
-        // Re-advance move order to pick up pregame sequence or custom turn cycle
-        if (pregameSequence || turnCycle) {
-            board.advanceMoveOrder();
-        }
-
-        // Apply preset stones if provided
-        if (presetStones && presetStones.length > 0) {
-            presetStones.forEach(stone => {
-                const node = board.nodes[stone.i];
-                if (node) {
-                    node.color = stone.c;
+        // Setup turns: expand [{sequence, repeat}] into a flat internal setupSequence
+        if (setupTurns && setupTurns.length) {
+            board.setupSequence = [];
+            for (const { sequence, repeat } of setupTurns) {
+                const r = repeat || 1;
+                for (let i = 0; i < r; i++) {
+                    for (const t of sequence) {
+                        board.setupSequence.push(new Turn(t));
+                    }
                 }
-            });
+            }
         }
 
-        // Apply list of coupon values if provided
-        if (coupons && coupons.length > 0) {
-            board.coupons = coupons
+        // Powers: {playerNum: [{sequence, numberOfUses}]}
+        if (powers) {
+            for (const [playerNum, powerList] of Object.entries(powers)) {
+                const p = parseInt(playerNum);
+                board.powers[p] = powerList.map(pw => ({
+                    sequence: pw.sequence.map(t => new Turn(t)),
+                    usesLeft: pw.numberOfUses,
+                }));
+            }
+        }
+
+        board.komi = komi || {};
+        board.timeSettings = timeSettings || null;
+        board.numPlayers = players || 2;
+        board.legalityChecks = legalityChecks || [];
+
+        // Apply setup stones (direct color assignment, no move logic)
+        if (setupStones && setupStones.length) {
+            for (const { i, c } of setupStones) {
+                if (board.nodes[i]) board.nodes[i].color = c;
+            }
+        }
+
+        // Initialize the turn order state
+        if (board.setupSequence.length > 0) {
+            board.currentSequence = { type: 'setup' };
+            board.sequenceIndex = 0;
+            board.currentTurn = new Turn(board.setupSequence[0]);
+        } else {
+            board.currentSequence = null;
+            board.sequenceIndex = null;
+            board.mainIndex = 0;
+            board.currentTurn = new Turn(board.order[0]);
         }
 
         return board;
     }
 
-    static grid(w, h = w) {
+    static grid(n) {
         let nodes = [];
-        for (let x = 0; x < w; x++) {
-            for (let y = 0; y < h; y++) {
+        for (let x = 0; x < n; x++) {
+            for (let y = 0; y < n; y++) {
                 nodes.push(new Node(x, y))
             }
         }
 
         let hoshi = []
-        if (w === 19 && h === 19) {
-            hoshi = [60, 66, 72, 174, 180, 186, 174, 288, 294, 300]
-        } else if (w === 9 && h === 9) {
-            hoshi = [40]
+        if (n === 19) {
+            hoshi = [60, 66, 72, 174, 180, 186, 288, 294, 300]
+        } else if (n === 13) {
+            hoshi = [42, 48, 84, 120, 126]
+        } else if (n === 9) {
+            hoshi = [20, 24, 40, 56, 60]
         }
 
         for (let i of hoshi) {
-            nodes[i].hoshi = true
+            if (nodes[i]) nodes[i].hoshi = true
         }
 
         return new this({ nodes });
@@ -211,20 +245,20 @@ class Board {
         return new this({ nodes });
     }
 
-    static rotatedGrid(w, h = w) {
+    static rotatedGrid(n) {
         let coordinates = [];
         let e1 = [Math.sqrt(2), 0];
         let e2 = [0, Math.sqrt(2)];
 
-        for (let x = 0; x < w; x++) {
-            for (let y = 0; y < h; y++) {
+        for (let x = 0; x < n; x++) {
+            for (let y = 0; y < n; y++) {
                 coordinates.push(e1.times(x).plus(e2.times(y)));
             }
         }
 
         let e3 = e1.plus(e2).over(2);
-        for (let x = 0; x < w - 1; x++) {
-            for (let y = 0; y < h - 1; y++) {
+        for (let x = 0; x < n - 1; x++) {
+            for (let y = 0; y < n - 1; y++) {
                 coordinates.push(e1.times(x).plus(e2.times(y)).plus(e3));
             }
         }
@@ -233,15 +267,26 @@ class Board {
         return new this({ nodes });
     }
 
-    constructor({ nodes, initial = "", order = "B,W" }) {
+    constructor({ nodes }) {
         this.nodes = nodes;
 
         nodes.forEach((node, index) => {
             node.i = index
         })
 
-        this.queue = orderFromString(initial)
-        this.order = orderFromString(order)
+        this.order = []              // Main turn cycle (array of Turn)
+        this.setupSequence = []      // Expanded setup sequence (array of Turn)
+        this.mainIndex = 0           // Current position in main cycle
+        this.currentSequence = null  // null=in main; {type:'setup'} or {type:'power',playerNum,powerIndex}
+        this.sequenceIndex = null    // Position in currentSequence (null when in main)
+        this.currentTurn = null      // The Turn to be made next
+        this.powers = {}             // Per-player: { [playerNum]: [{sequence:[Turn], usesLeft:N}] }
+        this.komi = {}               // Per-player: { [playerNum]: value }
+        this.timeSettings = null     // Per-player: { [playerNum]: {maintime, increment, cap} } or null
+        this.numPlayers = 2
+        this.visitedStates = new Set() // Serialized board states for superko checking
+        this.moveHistory = []          // [{i}] entries for last-move marker display
+        this.eliminatedPlayers = new Set() // Player numbers that have been eliminated
 
 
         // Calculate bounding box and initialize nodes
@@ -278,23 +323,134 @@ class Board {
         this.offsetY = 0;
         this.sw = 2; // strokeWeight for stones
         this.sp = 5; // diameter for starpoints
+    }
 
-        this.advanceMoveOrder()
-        this.moveHistory = []
+    clone() {
+        const nodes = this.nodes.map(n => {
+            const newNode = new Node(n.x, n.y);
+            newNode.color = n.color;
+            newNode.hoshi = n.hoshi;
+            newNode.i = n.i;
+            newNode.onlyVisibleTo = n.onlyVisibleTo;
+            return newNode;
+        });
+
+        for (let i = 0; i < this.nodes.length; i++) {
+            nodes[i].neighbors = this.nodes[i].neighbors.map(neighbor => nodes[neighbor.i]);
+        }
+
+        const newBoard = new Board({ nodes });
+        newBoard.order = this.order.map(t => new Turn(t));
+        newBoard.setupSequence = this.setupSequence.map(t => new Turn(t));
+        newBoard.mainIndex = this.mainIndex;
+        newBoard.currentSequence = this.currentSequence ? { ...this.currentSequence } : null;
+        newBoard.sequenceIndex = this.sequenceIndex;
+        newBoard.currentTurn = this.currentTurn ? new Turn(this.currentTurn) : null;
+
+        // Deep copy powers (preserving usesLeft)
+        newBoard.powers = {};
+        for (const [p, powerList] of Object.entries(this.powers)) {
+            newBoard.powers[p] = powerList.map(pw => ({
+                sequence: pw.sequence.map(t => new Turn(t)),
+                usesLeft: pw.usesLeft,
+            }));
+        }
+
+        newBoard.komi = { ...this.komi };
+        newBoard.timeSettings = this.timeSettings; // immutable reference is fine
+        newBoard.numPlayers = this.numPlayers;
+        newBoard.legalityChecks = this.legalityChecks; // immutable shared ref
+        newBoard.visitedStates = new Set(this.visitedStates);
+        newBoard.moveHistory = this.moveHistory.map(m => ({ ...m }));
+        newBoard.eliminatedPlayers = new Set(this.eliminatedPlayers);
+
+        newBoard.boundingBox = { ...this.boundingBox };
+        newBoard.width = this.width;
+        newBoard.height = this.height;
+        newBoard.scale = this.scale;
+        newBoard.offsetX = this.offsetX;
+        newBoard.offsetY = this.offsetY;
+        newBoard.sw = this.sw;
+        newBoard.sp = this.sp;
+
+        return newBoard;
     }
 
     advanceMoveOrder() {
-        if (!this.queue.length) {
-            this.queue = [...this.order]
+        // Skip eliminated players when advancing
+        const skipEliminated = (advance) => {
+            advance();
+            // Keep advancing while current player is eliminated (up to order.length times)
+            let guard = this.order.length + 1;
+            while (guard-- > 0 && this.currentSequence === null &&
+                   this.currentTurn && this.eliminatedPlayers.has(this.currentTurn.player)) {
+                const next = (this.mainIndex + 1) % this.order.length;
+                this.mainIndex = next;
+                this.currentTurn = new Turn(this.order[this.mainIndex]);
+            }
+        };
+
+        if (this.currentSequence === null) {
+            // Main sequence
+            skipEliminated(() => {
+                this.mainIndex = (this.mainIndex + 1) % this.order.length;
+                this.currentTurn = new Turn(this.order[this.mainIndex]);
+            });
+        } else if (this.currentSequence.type === 'setup') {
+            this.sequenceIndex++;
+            if (this.sequenceIndex >= this.setupSequence.length) {
+                // Setup complete — switch to main cycle
+                this.currentSequence = null;
+                this.sequenceIndex = null;
+                this.currentTurn = new Turn(this.order[this.mainIndex]);
+                // Skip if this player is already eliminated
+                skipEliminated(() => {});
+            } else {
+                this.currentTurn = new Turn(this.setupSequence[this.sequenceIndex]);
+            }
+        } else if (this.currentSequence.type === 'power') {
+            this.sequenceIndex++;
+            const { playerNum, powerIndex } = this.currentSequence;
+            const seq = this.powers[playerNum]?.[powerIndex]?.sequence || [];
+            if (this.sequenceIndex >= seq.length) {
+                // Power sequence complete — return to main and advance to next player
+                this.currentSequence = null;
+                this.sequenceIndex = null;
+                skipEliminated(() => {
+                    this.mainIndex = (this.mainIndex + 1) % this.order.length;
+                    this.currentTurn = new Turn(this.order[this.mainIndex]);
+                });
+            } else {
+                this.currentTurn = new Turn(seq[this.sequenceIndex]);
+            }
         }
-        this.currentMove = this.queue.shift()
+    }
+
+    getActiveSequence() {
+        if (this.currentSequence === null) return this.order;
+        if (this.currentSequence.type === 'setup') return this.setupSequence;
+        if (this.currentSequence.type === 'power') {
+            const { playerNum, powerIndex } = this.currentSequence;
+            return this.powers[playerNum]?.[powerIndex]?.sequence || this.order;
+        }
+        return this.order;
+    }
+
+    getActiveIndex() {
+        if (this.currentSequence === null) return this.mainIndex;
+        return this.sequenceIndex;
+    }
+
+    getActivePhase() {
+        if (this.currentSequence === null) return 'main';
+        return this.currentSequence.type;
     }
 
     calculateTransform(canvasWidth, canvasHeight) {
         // Add 1 unit margin on each side for stone radius
         const marginWidth = this.width + 1;
         const marginHeight = this.height + 1;
-        
+
         this.scale = Math.min(
             canvasWidth / marginWidth,
             canvasHeight / marginHeight
@@ -321,7 +477,7 @@ class Board {
         ];
     }
 
-    findHover(mouseX, mouseY, checkFromColor = true) {
+    findHover(mouseX, mouseY) {
         let [mx, my] = this.canvasToBoard(mouseX, mouseY);
         let closestNode = null;
         let minDistSq = 0.5;
@@ -334,53 +490,176 @@ class Board {
             }
         }
 
-        if (closestNode && (checkFromColor === false || closestNode.color === this.currentMove.from)) {
-            return closestNode;
-        }
-        return null;
+        return closestNode;
     }
 
-    placeStone(i, c = this.currentMove.to) {
-        let color = this.currentMove.to
-        let node = this.nodes[i];
-        if (!node || node.color) return false;
+    // Apply a compressed move record in-place (used for history replay — trusts the record).
+    // move is one of: {i,c[,l]} | {s:1} | {w:N} | {r:N}
+    applyMoveRecord(move) {
+        if (move[M_PASS]) {
+            this.advanceMoveOrder();
+            return;
+        }
 
-        node.color = c;
-        this.advanceMoveOrder()
-        this.moveHistory.push({ i, c })
+        if (move[M_POWER] !== undefined) {
+            const playerNum = this.currentTurn.player;
+            const powerIndex = move[M_POWER];
+            if (this.powers[playerNum]?.[powerIndex]) {
+                this.powers[playerNum][powerIndex].usesLeft--;
+            }
+            this.currentSequence = { type: 'power', playerNum, powerIndex };
+            this.sequenceIndex = 0;
+            this.currentTurn = new Turn(this.powers[playerNum][powerIndex].sequence[0]);
+            return;
+        }
 
-        // Capture opponent stones
-        let capturedChains = [];
-        for (let neighbor of node.neighbors) {
-            if (neighbor.color && neighbor.color !== color) {
-                let chain = this.findChainIfDead(neighbor);
-                if (chain.length > 0) {
-                    capturedChains.push(chain);
+        if (move[M_REVEALED] !== undefined) {
+            const node = this.nodes[move[M_REVEALED]];
+            if (node) node.onlyVisibleTo = null;
+            // Do not advance turn — revealing a hidden stone does not consume the player's turn.
+            return;
+        }
+
+        if (move[M_ELIMINATED] !== undefined) {
+            this.eliminatedPlayers.add(move[M_ELIMINATED]);
+            // If it's currently that player's turn, advance past them.
+            if (this.currentTurn && this.currentTurn.player === move[M_ELIMINATED]) {
+                this.advanceMoveOrder();
+            }
+            return;
+        }
+
+        // Normal place: {i, c}
+        const node = this.nodes[move[M_INDEX]];
+        if (node) {
+            node.color = move[M_COLOR];
+            if (this.currentTurn.hidden) {
+                // If the turn is played by a real player use that player number,
+                // otherwise (random player 0) attribute to the color placed.
+                const mover = this.currentTurn.player > 0
+                    ? this.currentTurn.player
+                    : move[M_COLOR];
+                node.onlyVisibleTo = mover;
+            } else {
+                node.onlyVisibleTo = null;
+            }
+
+            // Capture opponent stones
+            for (const neighbor of node.neighbors) {
+                if (neighbor.color > 0 && neighbor.color !== move[M_COLOR]) {
+                    const chain = this.findChainIfDead(neighbor);
+                    for (const stone of chain) stone.color = 0;
                 }
             }
+
+            // Suicide: if the placed stone's own chain has no liberties, capture it too
+            const ownChain = this.findChainIfDead(node);
+            for (const stone of ownChain) stone.color = 0;
+
+            this.visitedStates.add(this.nodes.map(n => n.color).join(''));
+            this.moveHistory.push({ i: move[M_INDEX] });
         }
 
-        for (let chain of capturedChains) {
-            for (let stone of chain) {
-                stone.color = 0;
-            }
-        }
-
-        // Check for suicide (remove own stone if no liberties)
-        let ownChain = this.findChainIfDead(node);
-        if (ownChain.length > 0) {
-            for (let stone of ownChain) {
-                stone.color = 0;
-            }
-        }
-
-        return true;
+        this.advanceMoveOrder();
     }
 
-    pass(c = this.currentMove.to) {
-        // A pass simply advances the move order without placing a stone
-        this.advanceMoveOrder();
-        this.moveHistory.push({ i: -1, c });
+    // Try to place a stone at index i with color c. Returns a new board clone if legal, null if not.
+    tryMove(i, c) {
+        const result = this.tryMoveReason(i, c);
+        return result.reason ? null : result.board;
+    }
+
+    // Like tryMove but returns { board, reason } — reason is null if legal, else a short string.
+    tryMoveReason(i, c) {
+        const node = this.nodes[i];
+
+        // Color 0 = remove a stone: must be on an occupied node
+        if (c === 0) {
+            if (!node || node.color <= 0) return { board: null, reason: 'empty' };
+            const clone = this.clone();
+            clone.nodes[i].color = 0;
+            // Superko check
+            const stateKey = clone.nodes.map(n => n.color).join('');
+            if (clone.visitedStates.has(stateKey)) return { board: null, reason: 'ko' };
+            // Variant legality checks
+            for (const check of (this.legalityChecks || [])) {
+                const reason = runLegalityCheck(check, clone, i, c, this);
+                if (reason) return { board: null, reason };
+            }
+            clone.visitedStates.add(stateKey);
+            clone.moveHistory.push({ i });
+            clone.advanceMoveOrder();
+            return { board: clone, reason: null };
+        }
+
+        if (!node || node.color !== 0) return { board: null, reason: 'occupied' };
+
+        const clone = this.clone();
+        const cloneNode = clone.nodes[i];
+        cloneNode.color = c;
+
+        // Capture opponent stones
+        for (const neighbor of cloneNode.neighbors) {
+            if (neighbor.color > 0 && neighbor.color !== c) {
+                const chain = clone.findChainIfDead(neighbor);
+                for (const stone of chain) stone.color = 0;
+            }
+        }
+
+        // Suicide check
+        const ownDead = clone.findChainIfDead(cloneNode);
+        if (ownDead.length > 0) return { board: null, reason: 'suicide' };
+
+        // Superko check
+        const stateKey = clone.nodes.map(n => n.color).join('');
+        if (clone.visitedStates.has(stateKey)) return { board: null, reason: 'ko' };
+
+        // Variant legality checks
+        for (const check of (this.legalityChecks || [])) {
+            const reason = runLegalityCheck(check, clone, i, c, this);
+            if (reason) return { board: null, reason };
+        }
+
+        // Valid — finalize
+        if (this.currentTurn.hidden) {
+            const mover = this.currentTurn.player > 0 ? this.currentTurn.player : c;
+            cloneNode.onlyVisibleTo = mover;
+        }
+        clone.visitedStates.add(stateKey);
+        clone.moveHistory.push({ i });
+        clone.advanceMoveOrder();
+        return { board: clone, reason: null };
+    }
+
+    // Returns true if any stone on the board is hidden from the given player.
+    hasHiddenStones(playerNum) {
+        for (const node of this.nodes) {
+            if (node.onlyVisibleTo !== null && node.onlyVisibleTo !== playerNum) return true;
+        }
+        return false;
+    }
+
+    // Returns a new board clone after passing. Always legal.
+    tryPass() {
+        const clone = this.clone();
+        clone.advanceMoveOrder();
+        return clone;
+    }
+
+    // Trigger power at powerIndex for playerNum. Returns a new board clone, or null if not allowed.
+    triggerPower(playerNum, powerIndex) {
+        if (this.currentSequence !== null) return null;
+        if (!this.currentTurn || this.currentTurn.player !== playerNum) return null;
+        const playerPowers = this.powers[playerNum];
+        if (!playerPowers?.[powerIndex]) return null;
+        if (playerPowers[powerIndex].usesLeft <= 0) return null;
+
+        const clone = this.clone();
+        clone.powers[playerNum][powerIndex].usesLeft--;
+        clone.currentSequence = { type: 'power', playerNum, powerIndex };
+        clone.sequenceIndex = 0;
+        clone.currentTurn = new Turn(clone.powers[playerNum][powerIndex].sequence[0]);
+        return clone;
     }
 
     // Find all stones of the same color that are in the same "region"
@@ -450,6 +729,25 @@ class Board {
         }
 
         return Array.from(visited); // No liberties found, return dead chain
+    }
+
+    // Returns all stones in the same-color connected group as `stone`.
+    findChain(stone) {
+        if (!stone || stone.color <= 0) return [];
+        const color = stone.color;
+        const visited = new Set();
+        const stack = [stone];
+        visited.add(stone);
+        while (stack.length) {
+            const current = stack.pop();
+            for (const neighbor of current.neighbors) {
+                if (!visited.has(neighbor) && neighbor.color === color) {
+                    visited.add(neighbor);
+                    stack.push(neighbor);
+                }
+            }
+        }
+        return Array.from(visited);
     }
 
     // Compute a map from each stone's index to its canonical representative
@@ -582,71 +880,7 @@ class Board {
         return true; // 0 or 1 liberties
     }
 
-    // check whether a placement would be suicidal
-    isSuicide(node, color) {
-        let currentColor = node.color
-
-        // Temporarily place the stone
-        node.color = color;
-
-        // Check if this move captures any enemy stones
-        let capturesEnemy = false;
-        for (let neighbor of node.neighbors) {
-            if (neighbor.color > 0 && neighbor.color !== color) {
-                let chain = this.findChainIfDead(neighbor);
-                if (chain.length > 0) {
-                    capturesEnemy = true;
-                    break;
-                }
-            }
-        }
-
-        // If we capture enemy stones, it's not suicide
-        if (capturesEnemy) {
-            node.color = 0; // Restore
-            return false;
-        }
-
-        // Check if our own stone/chain would be dead
-        let ownChain = this.findChainIfDead(node);
-        const isSuicidal = ownChain.length > 0;
-
-        // Restore the board state
-        node.color = currentColor;
-
-        return isSuicidal;
-    }
-
-    // check whether a placement would be self-atari (or suicide)
-    // Returns true if the resulting chain would have 0 or 1 liberties
-    isSelfAtari(node, color) {
-        let currentColor = node.color;
-
-        // Temporarily place the stone
-        node.color = color;
-
-        // Check if this move captures any enemy stones - if so, it's not self-atari
-        for (let neighbor of node.neighbors) {
-            if (neighbor.color > 0 && neighbor.color !== color) {
-                let chain = this.findChainIfDead(neighbor);
-                if (chain.length > 0) {
-                    node.color = currentColor;
-                    return false;
-                }
-            }
-        }
-
-        // Check if our own stone/chain is in atari (0 or 1 liberties)
-        const inAtari = this.isInAtari(node);
-
-        // Restore the original node
-        node.color = currentColor;
-
-        return inAtari;
-    }
-
-    draw(p, deadChains = null, canonicalIndexMap = null, territory = null) {
-        const align = (val) => Math.round(val + 0.5) - 0.5;
+    draw(p, deadChains = null, canonicalIndexMap = null, territory = null, viewerPlayer = null) {
         p.push();
         p.translate(this.offsetX, this.offsetY);
 
@@ -669,11 +903,11 @@ class Board {
         }
 
 
-        // Draw starpoints
+        // Draw starpoints (skip deleted nodes)
         p.noStroke();
         p.fill(...gridColor);
         for (let node of this.nodes) {
-            if (node.hoshi) {
+            if (node.hoshi && node.color !== -1) {
                 p.circle(align(node.x * this.scale), align(node.y * this.scale), this.sp);
             }
         }
@@ -682,11 +916,15 @@ class Board {
         p.strokeWeight(this.sw);
         for (let node of this.nodes) {
             if (node.color > 0) {
+                const showScoring = territory !== null;
+                const hiddenFromViewer = !showScoring && node.onlyVisibleTo !== null && node.onlyVisibleTo !== viewerPlayer;
+                // Skip stones invisible to this viewer (not in scoring mode)
+                if (hiddenFromViewer) continue;
+                const visibleAsGhost = !showScoring && node.onlyVisibleTo !== null && node.onlyVisibleTo === viewerPlayer;
                 const isDead = this.isInDeadChain(node, deadChains, canonicalIndexMap);
-                if (isDead) {
-                    // Draw dead stones as ghost stones (semi-transparent)
+                if (isDead || visibleAsGhost) {
                     p.fill(...stoneColors[node.color], 150);
-                    p.noStroke()
+                    p.noStroke();
                 } else {
                     p.fill(...stoneColors[node.color]);
                     p.stroke(...strokeColors[node.color]);
@@ -709,7 +947,11 @@ class Board {
             if (lastPlaced) {
                 const lastNode = this.nodes[lastPlaced.i];
                 const lastColor = lastNode?.color;
-                if (lastNode && lastColor > 0) {
+                // Don't draw the marker if the stone is hidden from the viewer
+                const hiddenFromViewer = lastNode?.onlyVisibleTo !== null
+                    && lastNode?.onlyVisibleTo !== undefined
+                    && lastNode?.onlyVisibleTo !== viewerPlayer;
+                if (lastNode && lastColor > 0 && !hiddenFromViewer) {
                     const markerSize = this.scale * 0.5;
                     p.noFill()
                     p.stroke(...markerColors[lastColor]);
@@ -743,94 +985,432 @@ class Board {
         p.pop();
     }
 
-    drawGhostStone(node, color, p) {
+    drawPreviewDiff(p, previewBoard) {
+        if (!previewBoard) return;
+
+        p.push();
+        p.translate(this.offsetX, this.offsetY);
+
+        // Draw all differences between current board and preview board
+        for (let i = 0; i < this.nodes.length; i++) {
+            const originalNode = this.nodes[i];
+            const previewNode = previewBoard.nodes[i];
+
+            if (originalNode.color !== previewNode.color) {
+                const cx = align(previewNode.x * this.scale);
+                const cy = align(previewNode.y * this.scale);
+
+                if (previewNode.color === 0 && originalNode.color > 0) {
+                    // Capture: stone was removed - draw outline only (no fill)
+                    p.noFill();
+                    p.stroke(...strokeColors[originalNode.color], 180);
+                    p.strokeWeight(this.sw * 1.5);
+                    p.circle(cx, cy, this.scale - this.sw);
+                } else if (previewNode.color > 0) {
+                    // New stone placed - draw as ghost (semi-transparent)
+                    p.fill(...stoneColors[previewNode.color], 120);
+                    p.stroke(...strokeColors[previewNode.color], 150);
+                    p.strokeWeight(this.sw);
+                    p.circle(cx, cy, this.scale - this.sw);
+                }
+            }
+        }
+
+        p.pop();
+    }
+
+    drawGhostStoneAt(p, node, color, turn = null) {
+        if (!node) return;
+        p.push();
+        p.translate(this.offsetX, this.offsetY);
+        const cx = align(node.x * this.scale);
+        const cy = align(node.y * this.scale);
+        const d = this.scale - this.sw;
+
+        if (color === 0 || color === -1) {
+            // Draw X over the intersection (or stone)
+            const xr = d * 0.25;
+            const underColor = node.color > 0 ? node.color : 0;
+            const mc = markerColors[underColor] || markerColors[0];
+            p.stroke(...mc, 200);
+            p.strokeWeight(3);
+            p.line(cx - xr, cy - xr, cx + xr, cy + xr);
+            p.line(cx - xr, cy + xr, cx + xr, cy - xr);
+            p.pop();
+            return;
+        }
+
+        p.fill(...stoneColors[color], 120);
+        p.stroke(...strokeColors[color], 150);
+        p.strokeWeight(this.sw);
+        p.circle(cx, cy, d);
+        // Traitor pie slice
+        if (turn && turn.traitorColor) {
+            const r = d / 2;
+            const dtheta = (turn.traitorPercentage ?? 10) / 100 * Math.PI;
+            const theta = Math.PI / 4;
+            p.fill(...stoneColors[turn.traitorColor], 130);
+            p.stroke(...strokeColors[color], 150);
+            p.arc(cx, cy, d, d, theta - dtheta, theta + dtheta);
+        }
+        p.pop();
+    }
+
+    drawIllegalMoveIndicator(p, node) {
         if (!node) return;
 
         p.push();
         p.translate(this.offsetX, this.offsetY);
-        p.strokeWeight(this.sw);
 
+        // Draw a red X to indicate illegal move
+        p.stroke(255, 0, 0, 200);
+        p.strokeWeight(4);
+        const cx = align(node.x * this.scale);
+        const cy = align(node.y * this.scale);
+        const r = (this.scale - this.sw) * 0.25;
+        p.line(cx - r, cy - r, cx + r, cy + r);
+        p.line(cx - r, cy + r, cx + r, cy - r);
 
-        if (color >= 1 && color <= 5) {
-            p.fill(...stoneColors[color], 127);
-            p.stroke(...strokeColors[color]);
-            p.circle(node.x * this.scale, node.y * this.scale, this.scale - this.sw);
-        }
+        p.pop();
+    }
 
-        if (color === -1) {
-            p.fill(boardColor)
-            p.noStroke()
-            p.circle(node.x * this.scale, node.y * this.scale, this.scale);
+    drawGhostStone(node, color, p, previewBoard = null, isIllegal = false) {
+        if (!node) return;
+
+        p.push();
+        p.translate(this.offsetX, this.offsetY);
+
+        const cx = align(node.x * this.scale);
+        const cy = align(node.y * this.scale);
+        const d  = this.scale - this.sw;
+        const xr = d * 0.25; // X arm radius
+
+        if (isIllegal) {
+            // Illegal move - draw a red X
+            p.stroke(255, 0, 0, 200);
+            p.strokeWeight(4);
+            p.line(cx - xr, cy - xr, cx + xr, cy + xr);
+            p.line(cx - xr, cy + xr, cx + xr, cy - xr);
+        } else if (color === 0 || color === -1) {
+            // color 0: remove stone; color -1: delete node
+            // Draw only an X — no circle — on top of the intersection or stone
+            const xr = d * 0.25;
+            const underColor = node.color > 0 ? node.color : 0;
+            const mc = markerColors[underColor] || markerColors[0];
+            p.stroke(...mc, 200);
+            p.strokeWeight(3);
+            p.line(cx - xr, cy - xr, cx + xr, cy + xr);
+            p.line(cx - xr, cy + xr, cx + xr, cy - xr);
+        } else {
+            if (previewBoard) {
+                // Draw all differences between current board and preview board
+                for (let n of previewBoard.nodes) {
+                    const originalNode = this.nodes[n.i];
+                    if (originalNode.color !== n.color) {
+                        // Skip the node where we are placing the stone (handled below)
+                        if (n.i === node.i) continue;
+
+                        if (n.color === 0) {
+                            // Removal (Capture)
+                            p.fill(...boardColor, 180);
+                            p.noStroke();
+                            p.circle(align(n.x * this.scale), align(n.y * this.scale), this.scale - this.sw);
+
+                            // Draw a small red marker to show it was captured
+                            p.stroke(255, 0, 0, 120);
+                            p.strokeWeight(2);
+                            const r = (this.scale - this.sw) * 0.15;
+                            const cx = align(n.x * this.scale);
+                            const cy = align(n.y * this.scale);
+                            p.line(cx - r, cy - r, cx + r, cy + r);
+                            p.line(cx - r, cy + r, cx + r, cy - r);
+                        } else {
+                            // Addition or Change
+                            p.fill(...stoneColors[n.color], 150);
+                            p.stroke(...strokeColors[n.color], 150);
+                            p.strokeWeight(this.sw);
+                            p.circle(align(n.x * this.scale), align(n.y * this.scale), this.scale - this.sw);
+                        }
+                    }
+                }
+            }
+
+            // Draw the ghost stone itself (the stone being placed)
+            // If previewBoard exists, use the color from the preview (in case logic changed it)
+            const previewNode = previewBoard ? previewBoard.nodes[node.i] : null;
+            const displayColor = (previewNode && previewNode.color > 0) ? previewNode.color : color;
+
+            p.fill(...stoneColors[displayColor], 150);
+            p.stroke(...strokeColors[displayColor], 150);
+            p.strokeWeight(this.sw);
+            p.circle(align(node.x * this.scale), align(node.y * this.scale), this.scale - this.sw);
         }
 
         p.pop();
     }
 }
 
-const colorCharToInt = {
-    "V": -1,
-    "E": 0,
-    "B": 1,
-    "W": 2,
-    "R": 3,
-    "Y": 4,
-    "C": 5,
-}
-
-const playerCharToInt = {
-    "X": 0,
-    "B": 1,
-    "W": 2,
-    "R": 3,
-    "Y": 4,
-    "C": 5,
-}
-
-class Move {
-    // TODO: support hidden moves (add an "h" at the end of string)
-    // TODO: Support lottery go (distribution for toColor)
-    static fromString(s) {
-        let p, f, t
-        p = s[0]
-        f = "E"
-        t = "B"
-        switch (s.length) {
-            case 1:
-                p = s
-                t = s
-                break;
-            case 2:
-                [p, t] = s.split("")
-                break;
-            case 3:
-                [p, f, t] = s.split("")
-                break;
-            default:
-                throw new Error(`Move "${s}" must be 1, 2 or 3 characters (got ${s.length})`);
+class Turn {
+    constructor(playerOrObj = 1, color = 1) {
+        if (typeof playerOrObj === 'object') {
+            const { player = 1, color: c = 1, hidden, traitorColor, traitorPercentage } = playerOrObj;
+            this.player = player;
+            this.color = c;
+            if (hidden) this.hidden = true;
+            if (traitorColor !== undefined) this.traitorColor = traitorColor;
+            if (traitorPercentage !== undefined) this.traitorPercentage = traitorPercentage;
+        } else {
+            this.player = playerOrObj;
+            this.color = color;
         }
-        let player = playerCharToInt[p]
-        let from = colorCharToInt[f]
-        let to = colorCharToInt[t]
-        if (player === undefined) {
-            throw new Error(`Invalid player "${p}" in move "${s}".`);
-        }
-        if (from === undefined) {
-            throw new Error(`Invalid color "${f}" in move "${s}".`);
-        }
-        if (to === undefined) {
-            throw new Error(`Invalid color "${t}" in move "${s}".`);
-        }
-        return new this({ player, from, to })
-    }
-
-    constructor({ player = 1, from = 0, to = 1, hidden = false }) {
-        this.player = player
-        this.from = from
-        this.to = to
-        this.hidden = hidden
     }
 }
 
-function orderFromString(s) {
-    return s.replaceAll(" ", "").split(",").filter(m => m.length).map(m => Move.fromString(m))
+// --- Firebase compression helpers ---
+
+function compressTurn(t) {
+    const ct = { [T_PLAYER]: t.player, [T_COLOR]: t.color };
+    if (t.hidden) ct[T_HIDDEN] = true;
+    if (t.traitorColor !== undefined) ct[T_TRAITOR_COLOR] = t.traitorColor;
+    if (t.traitorPercentage !== undefined) ct[T_TRAITOR_PCT] = t.traitorPercentage;
+    return ct;
+}
+
+function decompressTurn(ct) {
+    const t = { player: ct[T_PLAYER], color: ct[T_COLOR] };
+    if (ct[T_HIDDEN]) t.hidden = true;
+    if (ct[T_TRAITOR_COLOR] !== undefined) t.traitorColor = ct[T_TRAITOR_COLOR];
+    if (ct[T_TRAITOR_PCT] !== undefined) t.traitorPercentage = ct[T_TRAITOR_PCT];
+    return t;
+}
+
+// Evaluates a single legality check against a post-move clone.
+// Returns a reason string if the move is illegal, or null if it passes.
+function runLegalityCheck(check, cloneBoard, nodeIndex, moveColor, originalBoard) {
+    if (check.type === 'forbiddenChainSize') {
+        if (check.player !== null && check.player !== originalBoard.currentTurn.player) return null;
+        const size = check.size;
+        if (moveColor === 0) {
+            // Removing: check each resulting group that was formerly connected through the removed stone.
+            const originalNode = originalBoard.nodes[nodeIndex];
+            const seen = new Set();
+            for (const neighbor of originalNode.neighbors) {
+                if (neighbor.color <= 0) continue;
+                if (seen.has(neighbor.i)) continue;
+                const chain = cloneBoard.findChain(cloneBoard.nodes[neighbor.i]);
+                for (const n of chain) seen.add(n.i);
+                if (chain.length === size) return 'forbidden-chain-size';
+            }
+        } else {
+            // Placing: check the chain the new stone belongs to (after captures).
+            const chain = cloneBoard.findChain(cloneBoard.nodes[nodeIndex]);
+            if (chain.length === size) return 'forbidden-chain-size';
+        }
+    }
+    return null;
+}
+
+// Compress a JS gameSetting object to its Firebase representation.
+function compressGameSetting(gs) {
+    const c = {};
+    if (gs.boardType) c[GS_BOARD_TYPE] = gs.boardType;
+    if (gs.boardSize !== undefined) c[GS_BOARD_SIZE] = gs.boardSize;
+    if (gs.players !== undefined) c[GS_PLAYERS] = gs.players;
+    if (gs.setupStones?.length) c[GS_SETUP_STONES] = gs.setupStones; // already {i,c} form
+    if (gs.setupTurns?.length) {
+        c[GS_SETUP_TURNS] = gs.setupTurns.map(st => ({
+            [ST_SEQUENCE]: st.sequence.map(compressTurn),
+            [ST_REPEAT]: st.repeat,
+        }));
+    }
+    if (gs.mainSequence?.length) c[GS_MAIN_SEQ] = gs.mainSequence.map(compressTurn);
+    if (gs.powers && Object.keys(gs.powers).length) {
+        c[GS_POWERS] = {};
+        for (const [playerNum, pwList] of Object.entries(gs.powers)) {
+            c[GS_POWERS][playerNum] = pwList.map(pw => ({
+                [ST_SEQUENCE]: pw.sequence.map(compressTurn),
+                [PW_USES]: pw.numberOfUses,
+            }));
+        }
+    }
+    if (gs.komi && Object.keys(gs.komi).length) c[GS_KOMI] = gs.komi;
+    if (gs.timeSettings && Object.keys(gs.timeSettings).length) {
+        c[GS_TIME_SETTINGS] = {};
+        for (const [playerNum, ts] of Object.entries(gs.timeSettings)) {
+            c[GS_TIME_SETTINGS][playerNum] = {
+                [TS_MAINTIME]: ts.maintime,
+                [TS_INCREMENT]: ts.increment,
+            };
+        }
+    }
+    if (gs.legalityChecks?.length) {
+        c[GS_LEGALITY_CHECKS] = gs.legalityChecks.map(lc => {
+            const obj = { tp: lc.type, sz: lc.size };
+            if (lc.player !== null && lc.player !== undefined) obj.pl = lc.player;
+            return obj;
+        });
+    }
+    return c;
+}
+
+// Decompress a Firebase game document into an uncompressed gameSetting object.
+function decompressGameSetting(data) {
+    const gs = {};
+    if (data[GS_BOARD_TYPE] !== undefined) gs.boardType = data[GS_BOARD_TYPE];
+    if (data[GS_BOARD_SIZE] !== undefined) gs.boardSize = data[GS_BOARD_SIZE];
+    if (data[GS_PLAYERS] !== undefined) gs.players = data[GS_PLAYERS];
+    if (data[GS_SETUP_STONES]) gs.setupStones = data[GS_SETUP_STONES];
+    if (data[GS_SETUP_TURNS]) {
+        gs.setupTurns = data[GS_SETUP_TURNS].map(st => ({
+            sequence: (st[ST_SEQUENCE] || []).map(decompressTurn),
+            repeat: st[ST_REPEAT] || 1,
+        }));
+    }
+    if (data[GS_MAIN_SEQ]) gs.mainSequence = data[GS_MAIN_SEQ].map(decompressTurn);
+    if (data[GS_POWERS]) {
+        gs.powers = {};
+        for (const [playerNum, pwList] of Object.entries(data[GS_POWERS])) {
+            gs.powers[parseInt(playerNum)] = pwList.map(pw => ({
+                sequence: (pw[ST_SEQUENCE] || []).map(decompressTurn),
+                numberOfUses: pw[PW_USES],
+            }));
+        }
+    }
+    if (data[GS_KOMI]) gs.komi = data[GS_KOMI];
+    if (data[GS_TIME_SETTINGS]) {
+        gs.timeSettings = {};
+        for (const [playerNum, ts] of Object.entries(data[GS_TIME_SETTINGS])) {
+            gs.timeSettings[parseInt(playerNum)] = {
+                maintime: ts[TS_MAINTIME],
+                increment: ts[TS_INCREMENT],
+            };
+        }
+    }
+    if (data[GS_LEGALITY_CHECKS]) {
+        gs.legalityChecks = data[GS_LEGALITY_CHECKS].map(lc => ({
+            type: lc.tp,
+            size: lc.sz,
+            player: lc.pl ?? null,
+        }));
+    }
+    return gs;
+}
+
+// Compress a JS move record to its Firebase representation.
+function compressMoveRecord(move) {
+    if (move.pass) return { [M_PASS]: 1 };
+    if (move.power !== undefined) return { [M_POWER]: move.power };
+    if (move.revealed !== undefined) return { [M_REVEALED]: move.revealed };
+    const cm = { [M_INDEX]: move.index, [M_COLOR]: move.color };
+    if (move.timeLeft !== undefined) cm[M_TIME_LEFT] = move.timeLeft;
+    return cm;
+}
+
+// Decompress a Firebase move record to a JS move object.
+function decompressMoveRecord(cm) {
+    if (cm[M_PASS]) return { pass: 1 };
+    if (cm[M_POWER] !== undefined) return { power: cm[M_POWER] };
+    if (cm[M_REVEALED] !== undefined) return { revealed: cm[M_REVEALED] };
+    const move = { index: cm[M_INDEX], color: cm[M_COLOR] };
+    if (cm[M_TIME_LEFT] !== undefined) move.timeLeft = cm[M_TIME_LEFT];
+    return move;
+}
+
+// Shared stone drawing for move indicators (used by MoveListWidget + TurnOrderDisplay)
+function drawMoveStone(p, x, y, move, stoneSize) {
+    const r = Math.floor((stoneSize - 4)/2)
+
+    // Stone
+    if (move.hidden) {
+        p.fill(...stoneColors[move.color], 127);
+    } else {
+        p.fill(...stoneColors[move.color]);
+    }
+    p.stroke(...strokeColors[move.color]);
+    p.strokeWeight(2);
+    p.circle(x, y, 2 * r);
+
+    // X-mark for removing stones
+    if (move.color === 0) {
+        const s = r / 3;
+        p.line(x - s, y - s, x + s, y + s);
+        p.line(x - s, y + s, x + s, y - s);
+    }
+
+    // Traitor slice
+    if (move.traitorColor) {
+        p.fill(...stoneColors[move.traitorColor]);
+        p.stroke(...strokeColors[move.color]);
+        let dtheta = move.traitorPercentage / 100 * TAU / 2;
+        let theta = TAU / 8;
+        p.arc(x, y, 2 * r, 2 * r, theta - dtheta, theta + dtheta);
+    }
+
+
+    // Player triangle
+    p.fill(...stoneColors[move.player]);
+    p.stroke(...strokeColors[move.player]);
+    //p.noStroke();
+    p.triangle(x - r, y - r, x, y - r, x - r, y);
+    // p.stroke(...strokeColors[move.color]);
+    // p.line(x - r, y - r, x, y - r);
+    // p.line(x - r, y - r, x - r, y);
+}
+
+// Adapter so drawMoveStone (and related p5 drawing functions) can target a Canvas 2D context.
+// Supports the subset of p5 API used by drawMoveStone.
+function createCanvas2DAdapter(ctx) {
+    let _fill = null;
+    let _stroke = null;
+    let _sw = 1;
+
+    function parseColor(args) {
+        // Accept (r,g,b), (r,g,b,a), or ([r,g,b]) / ([r,g,b,a])
+        if (args.length === 1 && Array.isArray(args[0])) args = args[0];
+        const [r, g, b, a] = args;
+        return a !== undefined ? `rgba(${r},${g},${b},${a / 255})` : `rgb(${r},${g},${b})`;
+    }
+
+    return {
+        fill(...args) { _fill = parseColor(args); },
+        noFill() { _fill = null; },
+        stroke(...args) { _stroke = parseColor(args); },
+        noStroke() { _stroke = null; },
+        strokeWeight(w) { _sw = w; },
+        push() { ctx.save(); },
+        pop() { ctx.restore(); },
+        translate(x, y) { ctx.translate(x, y); },
+        circle(x, y, d) {
+            ctx.beginPath();
+            ctx.arc(x, y, d / 2, 0, Math.PI * 2);
+            if (_fill) { ctx.fillStyle = _fill; ctx.fill(); }
+            if (_stroke) { ctx.strokeStyle = _stroke; ctx.lineWidth = _sw; ctx.stroke(); }
+        },
+        line(x1, y1, x2, y2) {
+            if (!_stroke) return;
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.strokeStyle = _stroke;
+            ctx.lineWidth = _sw;
+            ctx.stroke();
+        },
+        triangle(x1, y1, x2, y2, x3, y3) {
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.lineTo(x3, y3);
+            ctx.closePath();
+            if (_fill) { ctx.fillStyle = _fill; ctx.fill(); }
+            if (_stroke) { ctx.strokeStyle = _stroke; ctx.lineWidth = _sw; ctx.stroke(); }
+        },
+        arc(x, y, w, h, start, stop) {
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.arc(x, y, w / 2, start, stop);
+            ctx.closePath();
+            if (_fill) { ctx.fillStyle = _fill; ctx.fill(); }
+            if (_stroke) { ctx.strokeStyle = _stroke; ctx.lineWidth = _sw; ctx.stroke(); }
+        },
+    };
 }

@@ -88,10 +88,18 @@ function initHomePage() {
     // Setup auth UI
     setupAuthUI();
     
-    // Listen for games
-    gamesRef = db.ref('games');
+    // Listen for the 12 most recently created games, sorted by createdAt
+    gamesRef = db.ref('games').orderByChild('createdAt').limitToLast(12);
     gamesRef.on('value', (snapshot) => {
-        displayGames(snapshot.val());
+        const games = snapshot.val();
+        if (!games) {
+            displayGames(null);
+            return;
+        }
+        // orderByChild+limitToLast gives oldest-first; reverse to newest-first
+        const sorted = Object.entries(games)
+            .sort((a, b) => (b[1].createdAt || 0) - (a[1].createdAt || 0));
+        displayGames(Object.fromEntries(sorted));
     });
 }
 
@@ -331,11 +339,15 @@ function createGame() {
         return;
     }
 
-    if (window.location.href == "http://127.0.0.1:3000/" || window.location.href == "http://127.0.0.1:3000/index.html" ) {
-        window.location.href = `/game-setup.html`
+    if (isLocalhost()) {
+        window.location.href = `/game-setup.html`;
     } else {
         window.location.href = '/game-setup';
     }
+}
+
+function isLocalhost() {
+    return window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost';
 }
 
 function displayGames(games) {
@@ -373,61 +385,54 @@ function createThumbnail(container, game) {
         let deadChains = null;
         let canonicalIndexMap = null;
         let territory = null;
-        
+
         p.setup = () => {
             const container = p._userNode;
             const size = Math.min(container.clientWidth, container.clientHeight) || 200;
             p.createCanvas(size, size);
             p.noLoop();
-            
-            // Initialize board from game settings
-            if (game.settings) {
-                const { boardType, boardWidth, boardHeight, presetStones, pregameSequence, turnCycle } = game.settings;
-                
-                board = Board.fromSettings({
-                    boardType: boardType || 'grid',
-                    boardWidth: boardWidth || 9,
-                    boardHeight: boardHeight || 9,
-                    pregameSequence: pregameSequence || '',
-                    turnCycle: turnCycle,
-                    presetStones: presetStones
-                });
-                
-                // Apply moves using placeStone to handle captures
-                if (game.moves) {
-                    Object.values(game.moves).forEach(move => {
-                        if (move.i != null && move.c) {
-                            board.placeStone(move.i, move.c);
-                        }
-                    });
+
+            // Decompress game settings from flat top-level keys
+            const gameSettings = decompressGameSetting(game);
+            if (gameSettings.boardType || gameSettings.boardSize) {
+                board = Board.fromSettings(gameSettings);
+
+                // Replay moves to reconstruct board state
+                const moves = game[G_MOVES];
+                if (moves) {
+                    const indices = Object.keys(moves).map(Number).sort((a, b) => a - b);
+                    for (const idx of indices) {
+                        if (moves[idx]) board.applyMoveRecord(moves[idx]);
+                    }
                 }
-                
-                // If game is in scoring or game over, compute territory display
-                if (game.inScoring || game.gameOver) {
-                    deadChains = game.deadChains || {};
+
+                // Show territory overlay in scoring/finished phase
+                const gamePhase = game[G_PHASE];
+                if (gamePhase === 'scoring' || gamePhase === 'finished') {
+                    deadChains = game[G_DEAD_CHAINS] || {};
                     canonicalIndexMap = board.computeCanonicalIndexMap();
                     territory = board.calculateTerritory(deadChains, canonicalIndexMap);
                 }
-                
+
                 board.calculateTransform(p.width, p.height);
+                p.redraw();
             }
         };
-        
+
         p.draw = () => {
             p.background(255, 193, 140);
-            
             if (board) {
                 board.draw(p, deadChains, canonicalIndexMap, territory);
             }
         };
     };
-    
+
     new p5(sketch, container);
 }
 
 function joinGame(gameId) {
-    if (window.location.href == "http://127.0.0.1:3000/" || window.location.href == "http://127.0.0.1:3000/index.html" ) {
-        window.location.href = `/game.html?id=${gameId}`
+    if (isLocalhost()) {
+        window.location.href = `/game.html?id=${gameId}`;
     } else {
         window.location.href = `/game/${gameId}`;
     }

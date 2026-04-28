@@ -1,0 +1,76 @@
+{
+  "rules": {
+    // User display names
+    "users": {
+      "$uid": {
+        "displayName": {
+          // Anyone can read display names
+          ".read": true,
+          // Users can only write their own display name
+          ".write": "auth != null && auth.uid === $uid",
+          // Display name must be a string of 1-20 characters
+          ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 20"
+        }
+      }
+    },
+    
+    // Games
+    "games": {
+      // Anyone authenticated can read the list of games
+      ".read": "auth != null",
+
+      // Index on createdAt for efficient sorting
+      ".indexOn": ["createdAt"],
+      
+      "$gameId": {
+        // Anyone authenticated can read game data
+        ".read": "auth != null",
+        
+        // Game creation: anyone authenticated can create a new game
+        ".write": "auth != null && !data.exists()",
+        
+        // Immutable after creation
+        "createdBy": {
+          ".write": "auth != null && !data.exists()"
+        },
+        "createdAt": {
+          ".write": "auth != null && !data.exists()"
+        },
+        
+        // Phase (ph) - only the host can transition from lobby; any authenticated user otherwise
+        "ph": {
+          ".write": "auth != null",
+          ".validate": "newData.isString()"
+        },
+        
+        // Clocks (cl) - any authenticated user can update
+        "cl": {
+          ".write": "auth != null"
+        },
+        
+        // Moves (mv) - any authenticated user can add or remove moves
+        "mv": {
+          ".write": "auth != null"
+        },
+        
+        // Request (rq) - any authenticated user can set/clear
+        "rq": {
+          ".write": "auth != null"
+        },
+        
+        // Dead chains (dc) - any authenticated user can modify
+        "dc": {
+          ".write": "auth != null"
+        },
+        
+        // Seats - any authenticated user can take/leave seats
+        "seats": {
+          ".write": "auth != null",
+          "$playerNum": {
+            ".validate": "newData.isString() || !newData.exists()"
+          }
+        }
+      }
+    }
+  }
+}
