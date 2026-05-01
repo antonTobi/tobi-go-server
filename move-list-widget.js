@@ -45,8 +45,6 @@ class MoveListWidget {
         return this.moves.map(m => {
             const obj = { player: m.player, color: m.color };
             if (m.hidden) obj.hidden = true;
-            if (m.traitorColor !== undefined) obj.traitorColor = m.traitorColor;
-            if (m.traitorPercentage !== undefined) obj.traitorPercentage = m.traitorPercentage;
             return obj;
         });
     }
@@ -409,37 +407,29 @@ class MoveListWidget {
     }
 
     _buildPopupHTML(move, idx) {
-        const isTraitor = move.traitorColor !== undefined;
-        const traitorPct = move.traitorPercentage ?? 10;
         const canDelete = this.moves.length > 1;
+
+        const COLOR_NAMES = ['Remove stone', 'Black', 'White', 'Red', 'Yellow', 'Blue'];
+        COLOR_NAMES[-1] = 'Delete intersection';
+        const playerLabel = move.player === 0 ? 'Random agent' : (COLOR_NAMES[move.player] || `Player ${move.player}`);
+        let colorLabel;
+        if (move.hidden) {
+            colorLabel = (COLOR_NAMES[move.color] || `Color ${move.color}`) + ' (hidden)';
+        } else {
+            colorLabel = COLOR_NAMES[move.color] ?? `Color ${move.color}`;
+        }
 
         let html = '';
 
         html += '<div class="popup-section">';
-        html += '<div class="popup-label">Player</div>';
+        html += `<div class="popup-label">Player: <span class="popup-label-value">${playerLabel}</span></div>`;
         html += '<div class="popup-canvas-row" data-row="player"></div>';
         html += '</div>';
 
         html += '<div class="popup-section">';
-        html += '<div class="popup-label">Color</div>';
+        html += `<div class="popup-label">Color: <span class="popup-label-value">${colorLabel}</span></div>`;
         html += '<div class="popup-canvas-row" data-row="color"></div>';
         html += '</div>';
-
-        html += '<div class="popup-section">';
-        html += '<div class="popup-label">Traitor</div>';
-        html += '<div class="popup-canvas-row" data-row="traitor"></div>';
-        html += '</div>';
-
-        if (isTraitor) {
-            html += '<div class="popup-section">';
-            html += '<div class="popup-label">Percentage</div>';
-            html += '<div class="popup-spinner-row">';
-            html += '<button type="button" class="popup-spinner-btn" data-action="dec">−</button>';
-            html += `<input type="number" class="popup-pct-input" min="1" max="50" value="${traitorPct}">`;
-            html += '<button type="button" class="popup-spinner-btn" data-action="inc">+</button>';
-            html += '</div>';
-            html += '</div>';
-        }
 
         html += '<div class="popup-section popup-bottom-row">';
         html += `<button type="button" class="popup-delete-btn"${canDelete ? '' : ' disabled'}>Delete</button>`;
@@ -578,73 +568,10 @@ class MoveListWidget {
                         const item = colorRows[ri][ci];
                         move.color = item.c;
                         move.hidden = item.h;
-                        if (item.c === 0 || item.c === -1 || item.h) {
-                            delete move.traitorColor; delete move.traitorPercentage;
-                        }
                         self._showPopup(idx); self._redraw(); self._fireChange();
                         break;
                     }
                 }
-            });
-        }
-
-        // --- Traitor color selector: Disabled + 1-5 ---
-        const traitorRowEl = this.popup.querySelector('[data-row="traitor"]');
-        if (traitorRowEl) {
-            const traitorItems = [0, 1, 2, 3, 4, 5]; // 0 = disabled
-            const { canvas: tCanvas, p: tp, h: th } = makeSelectorCanvas(traitorRowEl, traitorItems.length);
-            const tcy = th / 2;
-            const od = ISIZE - 4, rod = od / 2;
-            for (let i = 0; i < traitorItems.length; i++) {
-                const c = traitorItems[i];
-                const cx = i * ISLOT + ISLOT / 2 + IPAD / 2;
-                const isSelected = c === 0 ? (move.traitorColor === undefined) : (c === move.traitorColor);
-                if (isSelected) {
-                    tp.noFill(); tp.stroke(102, 126, 234); tp.strokeWeight(2.5);
-                    tp.circle(cx, tcy, ISIZE + 4);
-                }
-                if (c === 0) {
-                    tp.fill(170, 170, 170); tp.stroke(100, 100, 100); tp.strokeWeight(2);
-                    tp.circle(cx, tcy, od);
-                    const s = rod / 3;
-                    tp.stroke(100, 100, 100); tp.strokeWeight(1.5);
-                    tp.line(cx - s, tcy - s, cx + s, tcy + s);
-                    tp.line(cx - s, tcy + s, cx + s, tcy - s);
-                } else {
-                    tp.fill(...stoneColors[c]); tp.stroke(...strokeColors[c]); tp.strokeWeight(2);
-                    tp.circle(cx, tcy, od);
-                }
-            }
-            addClickHandler(tCanvas, traitorItems, (c) => {
-                move.hidden = 0;
-                if (move.color < 1) move.color = 1;
-                if (c === 0) {
-                    delete move.traitorColor; delete move.traitorPercentage;
-                } else {
-                    move.traitorColor = c;
-                    if (move.traitorPercentage === undefined) move.traitorPercentage = 10;
-                }
-                self._showPopup(idx); self._redraw(); self._fireChange();
-            });
-        }
-
-        // --- Traitor percentage spinner ---
-        const pctInput = this.popup.querySelector('.popup-pct-input');
-        if (pctInput) {
-            pctInput.addEventListener('change', (e) => {
-                const val = Math.max(1, Math.min(50, parseInt(e.target.value, 10) || 10));
-                move.traitorPercentage = val;
-                self._redraw(); self._fireChange();
-            });
-            this.popup.querySelectorAll('.popup-spinner-btn').forEach(btn => {
-                btn.addEventListener('mousedown', (e) => {
-                    e.stopPropagation();
-                    const delta = btn.dataset.action === 'inc' ? 1 : -1;
-                    const val = Math.max(1, Math.min(50, (parseInt(pctInput.value, 10) || 10) + delta));
-                    pctInput.value = val;
-                    move.traitorPercentage = val;
-                    self._redraw(); self._fireChange();
-                });
             });
         }
 

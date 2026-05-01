@@ -63,6 +63,11 @@
           ".write": "auth != null"
         },
         
+        // Review state (rv) - any authenticated user can update
+        "rv": {
+          ".write": "auth != null"
+        },
+        
         // Seats - any authenticated user can take/leave seats
         "seats": {
           ".write": "auth != null",

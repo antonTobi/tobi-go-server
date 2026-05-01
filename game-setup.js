@@ -23,11 +23,11 @@ const pickerSelectionBorder = 4;
 
 // Board type configuration
 const boardTypeConfig = {
-    grid:        { defaultSize: '9',  min: 2, max: 25 },
+    grid:        { defaultSize: '9',  min: 2, max: 19 },
     star:        { defaultSize: '5',  min: 2, max: 9  },
-    dodecagon:   { defaultSize: '4',  min: 2, max: 7  },
-    rotatedGrid: { defaultSize: '9',  min: 2, max: 19 },
-    hexagon:     { defaultSize: '6',  min: 2, max: 11 },
+    dodecagon:   { defaultSize: '4',  min: 2, max: 5  },
+    rotatedGrid: { defaultSize: '9',  min: 2, max: 13 },
+    hexagon:     { defaultSize: '6',  min: 2, max: 9 },
 };
 
 if (document.readyState === 'loading') {
@@ -101,6 +101,8 @@ function addVariant(type) {
         'clock':      'Clock',
         'komi':       'Komi',
         'legalitycheck': 'Forbidden Chain-Size',
+        'komaster':      'Ko Master',
+        'capturecheck':  'Capture Go',
     };
 
     const bodyId = `variant-body-${id}`;
@@ -275,6 +277,44 @@ function buildVariantBody(entry, containerId) {
                     </select>
                     <label class="setup-entry-repeat">Forbidden size
                         <input type="number" id="${sizeInputId}" min="1" value="4">
+                    </label>
+                </div>
+            `;
+            entry.sizeInputId    = sizeInputId;
+            entry.playerSelectId = playerSelectId;
+            break;
+        }
+        case 'komaster': {
+            const playerSelectId = `variant-komaster-player-${id}`;
+            container.innerHTML = `
+                <div class="variant-clock-row">
+                    <select class="variant-player-select" id="${playerSelectId}">
+                        <option value="1">Player 1</option>
+                        <option value="2">Player 2</option>
+                        <option value="3">Player 3</option>
+                        <option value="4">Player 4</option>
+                        <option value="5">Player 5</option>
+                    </select>
+                </div>
+            `;
+            entry.playerSelectId = playerSelectId;
+            break;
+        }
+        case 'capturecheck': {
+            const sizeInputId    = `variant-cap-size-${id}`;
+            const playerSelectId = `variant-cap-player-${id}`;
+            container.innerHTML = `
+                <div class="variant-clock-row">
+                    <select class="variant-player-select" id="${playerSelectId}">
+                        <option value="all">All players</option>
+                        <option value="1">Player 1</option>
+                        <option value="2">Player 2</option>
+                        <option value="3">Player 3</option>
+                        <option value="4">Player 4</option>
+                        <option value="5">Player 5</option>
+                    </select>
+                    <label class="setup-entry-repeat">Capture limit
+                        <input type="number" id="${sizeInputId}" min="1" value="1">
                     </label>
                 </div>
             `;
@@ -719,6 +759,18 @@ function handleCreateGame(event) {
                 const target = document.getElementById(entry.playerSelectId).value;
                 const player = target === 'all' ? null : parseInt(target, 10);
                 legalityChecks.push({ type: 'forbiddenChainSize', size, player });
+                break;
+            }
+            case 'komaster': {
+                const player = parseInt(document.getElementById(entry.playerSelectId).value, 10);
+                legalityChecks.push({ type: 'koMaster', player });
+                break;
+            }
+            case 'capturecheck': {
+                const size = Math.max(1, parseInt(document.getElementById(entry.sizeInputId).value, 10) || 1);
+                const target = document.getElementById(entry.playerSelectId).value;
+                const player = target === 'all' ? null : parseInt(target, 10);
+                legalityChecks.push({ type: 'captureGo', size, player });
                 break;
             }
         }

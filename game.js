@@ -49,6 +49,20 @@ let liveMoves = [];      // All moves from database, stored separately
 let viewIndex = 0;       // Current move index being viewed (0 = initial board, liveMoves.length = latest)
 let isViewingHistory = false; // True if user is viewing past moves (not auto-advancing)
 
+// Local review / variation mode (active only when game is finished)
+// reviewBranchPoint: null = on main branch; integer = main-branch index where we left it
+// reviewBranchMoves: array of compressed move records played in the current variation
+// reviewVariationIndex: position within reviewBranchMoves (0 = at branch point)
+let reviewBranchPoint = null;
+let reviewBranchMoves = [];
+let reviewVariationIndex = 0;
+let isOnlineReview = false; // true = synced with server review state, false = local only
+const isReviewing = () => isFinished();
+// True when we've diverged from the main branch
+const inVariation  = () => reviewBranchPoint !== null;
+// True when this client can drive the shared review (participant + online mode)
+const canControlOnlineReview = () => isOnlineReview && mySeat !== null;
+
 // Debug
 window._debugBoard = () => board;
 window._debugSeats = () => ({ seats, mySeat, requiredSeats });
@@ -155,6 +169,7 @@ function initGame() {
             request       = gameData[G_REQUEST]     || null;
             deadChains    = gameData[G_DEAD_CHAINS] || {};
             gameLoaded = true;
+            if (isFinished()) isOnlineReview = true;
 
             requiredSeats = getRequiredSeats(gameSettings);
 
@@ -178,6 +193,7 @@ function initGame() {
             gameRef.child(G_REQUEST).on('value', handleRequestChanged);
             movesRef.on('child_added', handleMoveAdded);
             movesRef.on('child_removed', handleMoveRemoved);
+            gameRef.child(G_REVIEW).on('value', handleReviewChanged);
         })
         .catch((error) => {
             console.error('Error loading game:', error);
@@ -249,6 +265,8 @@ function handleMoveAdded(snapshot) {
         renderGameControls();
         renderHistoryControls();
         if (p5Instance) p5Instance.redraw();
+
+        checkCaptureGoElimination();
     }
 }
 
@@ -282,6 +300,7 @@ function handlePhaseChanged(snapshot) {
         canonicalIndexMap = null;
         territory = null;
     }
+    if (isFinished()) isOnlineReview = true;
     renderPlayerCards();
     renderGameControls();
     renderTurnOrder();
@@ -338,14 +357,24 @@ function rebuildBoardToView() {
         board = Board.fromSettings(gameSettings);
         if (p5Instance) board.calculateTransform(p5Instance.width, p5Instance.height);
 
-        for (let i = 0; i < viewIndex && i < liveMoves.length; i++) {
+        // Replay main-branch moves up to viewIndex
+        const mainEnd = inVariation() ? reviewBranchPoint : viewIndex;
+        for (let i = 0; i < mainEnd && i < liveMoves.length; i++) {
             if (liveMoves[i]) board.applyMoveRecord(liveMoves[i]);
+        }
+
+        // If in a variation branch, also replay variation moves up to reviewVariationIndex
+        if (inVariation()) {
+            for (let j = 0; j < reviewVariationIndex && j < reviewBranchMoves.length; j++) {
+                board.applyMoveRecord(reviewBranchMoves[j]);
+            }
         }
 
         renderTurnOrder();
 
-        const viewingLatest = viewIndex >= liveMoves.length;
-        if ((isScoring() || isFinished()) && viewingLatest) {
+        // Only show scoring overlay when on the final main-branch position
+        const viewingFinalMain = !inVariation() && viewIndex >= liveMoves.length;
+        if ((isScoring() || isFinished()) && viewingFinalMain) {
             canonicalIndexMap = board.computeCanonicalIndexMap();
             territory = board.calculateTerritory(deadChains, canonicalIndexMap);
         } else {
@@ -363,48 +392,192 @@ function rebuildBoardToView() {
 
 
 // History navigation functions
+
+// Helper: discard the variation branch and return to main branch at viewIndex
+function discardVariation() {
+    reviewBranchPoint = null;
+    reviewBranchMoves = [];
+    reviewVariationIndex = 0;
+}
+
+// Total moves visible in current context (main or variation)
+function reviewTotalMoves() {
+    if (inVariation()) return reviewBranchMoves.length;
+    return liveMoves.length;
+}
+
+// Current position index in current context
+function reviewCurrentIndex() {
+    if (inVariation()) return reviewVariationIndex;
+    return viewIndex;
+}
+
+function pushReviewState() {
+    if (!canControlOnlineReview() || !gameRef || !isFinished()) return;
+    gameRef.child(G_REVIEW).set({
+        vi: viewIndex,
+        bp: reviewBranchPoint,
+        bm: reviewBranchMoves.length > 0 ? reviewBranchMoves : null,
+        ri: reviewVariationIndex,
+    });
+}
+
+function handleReviewChanged(snapshot) {
+    if (!isFinished() || !isOnlineReview) return;
+    const data = snapshot.val();
+    if (!data) return; // No review state yet; keep local position
+
+    const newVi = data.vi != null ? data.vi : liveMoves.length;
+    const newBp = data.bp != null ? data.bp : null;
+    const bmRaw = data.bm;
+    const newBm = !bmRaw ? [] :
+        Array.isArray(bmRaw) ? bmRaw :
+        Object.keys(bmRaw).sort((a, b) => parseInt(a) - parseInt(b)).map(k => bmRaw[k]);
+    const newRi = data.ri != null ? data.ri : 0;
+
+    viewIndex = newVi;
+    reviewBranchPoint = newBp;
+    reviewBranchMoves = newBm;
+    reviewVariationIndex = newRi;
+    isViewingHistory = !inVariation() && viewIndex < liveMoves.length;
+
+    rebuildBoardToView();
+    renderHistoryControls();
+    renderGameControls();
+    renderPlayerCards();
+    if (p5Instance) p5Instance.redraw();
+}
+
+function toggleReviewMode() {
+    isOnlineReview = !isOnlineReview;
+    if (isOnlineReview && gameRef) {
+        // Pull current server state immediately.
+        // IMPORTANT: use an arrow wrapper, NOT handleReviewChanged directly.
+        // Firebase .once() deregisters the callback by reference when done;
+        // passing the same function used by the persistent .on() would remove that listener too.
+        gameRef.child(G_REVIEW).once('value', snap => handleReviewChanged(snap));
+    }
+    renderGameControls();
+    renderHistoryControls();
+}
+
+// If a non-participant acts in online mode, silently drop to local mode
+function autoDesync() {
+    if (isOnlineReview && !canControlOnlineReview()) {
+        isOnlineReview = false;
+        renderGameControls();
+    }
+}
+
+// Push (only for participants) OR auto-desync (for spectators who just acted)
+function pushOrDesync() {
+    if (canControlOnlineReview()) {
+        pushReviewState();
+    } else {
+        autoDesync();
+    }
+}
+
 function goToFirstMove() {
+    if (inVariation()) {
+        // Return to branch point (= start of variation)
+        reviewVariationIndex = 0;
+        pushOrDesync();
+        rebuildBoardToView();
+        renderHistoryControls();
+        renderGameControls();
+        renderPlayerCards();
+        if (p5Instance) p5Instance.redraw();
+        return;
+    }
     if (viewIndex === 0) return;
     viewIndex = 0;
     isViewingHistory = true;
+    pushOrDesync();
     rebuildBoardToView();
     renderHistoryControls();
+    renderGameControls();
     renderPlayerCards();
     if (p5Instance) p5Instance.redraw();
 }
 
 function goToPrevMove() {
+    if (inVariation()) {
+        if (reviewVariationIndex <= 0) {
+            stopAllHolds();
+            return;
+        }
+        reviewVariationIndex--;
+        pushOrDesync();
+        rebuildBoardToView();
+        renderHistoryControls();
+        renderGameControls();
+        renderPlayerCards();
+        if (p5Instance) p5Instance.redraw();
+        return;
+    }
     if (viewIndex <= 0) {
         stopAllHolds();
         return;
     }
     viewIndex--;
     isViewingHistory = true;
+    pushOrDesync();
     rebuildBoardToView();
     renderHistoryControls();
+    renderGameControls();
     renderPlayerCards();
     if (p5Instance) p5Instance.redraw();
 }
 
 function goToNextMove() {
+    if (inVariation()) {
+        if (reviewVariationIndex >= reviewBranchMoves.length) {
+            stopAllHolds();
+            return;
+        }
+        reviewVariationIndex++;
+        pushOrDesync();
+        rebuildBoardToView();
+        renderHistoryControls();
+        renderGameControls();
+        renderPlayerCards();
+        if (p5Instance) p5Instance.redraw();
+        return;
+    }
     if (viewIndex >= liveMoves.length) {
         stopAllHolds();
         return;
     }
     viewIndex++;
     if (viewIndex >= liveMoves.length) isViewingHistory = false;
+    pushOrDesync();
     rebuildBoardToView();
     renderHistoryControls();
+    renderGameControls();
     renderPlayerCards();
     if (p5Instance) p5Instance.redraw();
 }
 
 function goToLastMove() {
+    if (inVariation()) {
+        if (reviewVariationIndex >= reviewBranchMoves.length) return;
+        reviewVariationIndex = reviewBranchMoves.length;
+        pushOrDesync();
+        rebuildBoardToView();
+        renderHistoryControls();
+        renderGameControls();
+        renderPlayerCards();
+        if (p5Instance) p5Instance.redraw();
+        return;
+    }
     if (viewIndex >= liveMoves.length) return;
     viewIndex = liveMoves.length;
     isViewingHistory = false;
+    pushOrDesync();
     rebuildBoardToView();
     renderHistoryControls();
+    renderGameControls();
     renderPlayerCards();
     if (p5Instance) p5Instance.redraw();
 }
@@ -503,6 +676,60 @@ function stopAllHolds() {
     // Stop keyboard holds
     stopKeyboardHold('leftArrow');
     stopKeyboardHold('rightArrow');
+}
+
+// --- Review (local variation) move submission ---
+
+function addReviewMove(i) {
+    if (!isReviewing() || !board) return;
+    const color = board.currentTurn.color;
+    const { board: nextBoard, reason } = board.tryMoveReason(i, color);
+    if (!nextBoard) {
+        const messages = {
+            occupied: 'That intersection is occupied.',
+            empty:    'That intersection is already empty.',
+            suicide:  'That move would be suicidal.',
+            ko:       'That move is forbidden by the ko rule.',
+            'forbidden-chain-size': 'That move would create a forbidden chain size.',
+        };
+        showToast(messages[reason] || 'Illegal move.');
+        return;
+    }
+    // Enter variation branch if not already in one
+    if (!inVariation()) {
+        reviewBranchPoint = viewIndex;
+        reviewBranchMoves = [];
+        reviewVariationIndex = 0;
+    }
+    // Truncate any forward variation moves beyond current index
+    reviewBranchMoves.splice(reviewVariationIndex);
+    reviewBranchMoves.push({ [M_INDEX]: i });
+    reviewVariationIndex++;
+    pushOrDesync();
+    rebuildBoardToView();
+    renderHistoryControls();
+    renderGameControls();
+    renderPlayerCards();
+    hoverNode = null;
+    if (p5Instance) p5Instance.redraw();
+}
+
+function addReviewPass() {
+    if (!isReviewing() || !board) return;
+    if (!inVariation()) {
+        reviewBranchPoint = viewIndex;
+        reviewBranchMoves = [];
+        reviewVariationIndex = 0;
+    }
+    reviewBranchMoves.splice(reviewVariationIndex);
+    reviewBranchMoves.push({ [M_PASS]: 1 });
+    reviewVariationIndex++;
+    pushOrDesync();
+    rebuildBoardToView();
+    renderHistoryControls();
+    renderGameControls();
+    renderPlayerCards();
+    if (p5Instance) p5Instance.redraw();
 }
 
 function undoToCurrentPosition() {
@@ -645,7 +872,7 @@ function processRandomMoves() {
         moveRecord = { [M_PASS]: 1 };
     } else {
         const picked = candidates[Math.floor(Math.random() * candidates.length)];
-        moveRecord = { [M_INDEX]: picked.i, [M_COLOR]: currentTurn.color };
+        moveRecord = { [M_INDEX]: picked.i };
         // No timeLeft for random player (player === 0)
     }
 
@@ -709,35 +936,25 @@ function canMakeMove() {
     return currentUser && isMyTurn() && !isViewingHistory && !hasSoleWinner();
 }
 
-function addMove(i, c, primaryColor = c) {
+function addMove(i) {
     if (!canMakeMove()) return;
 
-    // Legality is always checked against the primary (intended) color.
-    const { board: nextBoard, reason } = board.tryMoveReason(i, primaryColor);
+    const color = board.currentTurn.color;
+    const { board: nextBoard, reason } = board.tryMoveReason(i, color);
     if (!nextBoard) {
-        // If c === primaryColor this is a genuine illegal move by the player.
-        // If c !== primaryColor the traitor color was rolled — the move is forced through anyway.
-        if (c === primaryColor) {
-            const messages = {
-                occupied: 'That intersection is occupied.',
-                empty:    'That intersection is already empty.',
-                suicide:  'That move would be suicidal.',
-                ko:       'That move is forbidden by the ko rule.',
-                'forbidden-chain-size': 'That move would create a forbidden chain size.',
-            };
-            showToast(messages[reason] || 'Illegal move.');
-            return;
-        }
-        // Forced traitor move: still need to check the spot isn't occupied by another stone.
-        if (reason === 'occupied') {
-            showToast('That intersection is occupied.');
-            return;
-        }
-        // Suicide/ko with traitor color: force the move. applyMoveRecord handles capture.
+        const messages = {
+            occupied: 'That intersection is occupied.',
+            empty:    'That intersection is already empty.',
+            suicide:  'That move would be suicidal.',
+            ko:       'That move is forbidden by the ko rule.',
+            'forbidden-chain-size': 'That move would create a forbidden chain size.',
+        };
+        showToast(messages[reason] || 'Illegal move.');
+        return;
     }
 
     const playerNum = board.currentTurn.player;
-    const moveRecord = { [M_INDEX]: i, [M_COLOR]: c };
+    const moveRecord = { [M_INDEX]: i };
 
     // Add timeLeft if this player has time settings and is a human player
     if (playerNum > 0 && gameSettings.timeSettings?.[playerNum]) {
@@ -748,13 +965,10 @@ function addMove(i, c, primaryColor = c) {
     const updates = {};
     updates[`${G_MOVES}/${liveMoves.length}`] = moveRecord;
 
-    // Update clocks using nextBoard (always from the primary-color check).
-    // If nextBoard is null (forced traitor move), advance turn order manually for clock purposes.
     if (gameSettings.timeSettings) {
         const timeLeft = computeTimeLeft(playerNum);
         if (timeLeft !== null) updates[`${G_CLOCKS}/${playerNum}`] = timeLeft;
-        const clockNextBoard = nextBoard || board.tryPass(); // tryPass just advances turn order
-        const nextTurn = clockNextBoard.currentTurn;
+        const nextTurn = nextBoard.currentTurn;
         if (nextTurn && nextTurn.player > 0 && gameSettings.timeSettings[nextTurn.player]) {
             const nextPlayerClock = clocks[nextTurn.player];
             if (nextPlayerClock !== undefined && nextPlayerClock !== null) {
@@ -823,6 +1037,44 @@ function addElimination(playerNum, reason) {
     });
 }
 
+// Returns the set of colors used by this player in the main turn order.
+function getPlayerColors(playerNum) {
+    const colors = new Set();
+    if (!board) return colors;
+    for (const turn of board.order) {
+        if (turn.player === playerNum && turn.color > 0) colors.add(turn.color);
+    }
+    return colors;
+}
+
+// Returns total stones of this player's colors captured so far.
+function getPlayerCaptures(playerNum) {
+    if (!board) return 0;
+    const colors = getPlayerColors(playerNum);
+    let total = 0;
+    for (const c of colors) total += board.capturedByColor[c] || 0;
+    return total;
+}
+
+// Check if any player has hit their capture-go threshold and add elimination records.
+// Only called by seated players, not spectators.
+function checkCaptureGoElimination() {
+    if (!isPlaying() || mySeat === null || isViewingHistory || !board) return;
+    const checks = gameSettings?.legalityChecks || [];
+    for (const p of requiredSeats) {
+        if (board.eliminatedPlayers.has(p)) continue;
+        for (const check of checks) {
+            if (check.type !== 'captureGo') continue;
+            if (check.player !== null && check.player !== p) continue;
+            const captured = getPlayerCaptures(p);
+            if (captured >= check.size) {
+                addElimination(p, 'capture-go');
+                break;
+            }
+        }
+    }
+}
+
 function resign() {
     if (!mySeat || !isPlaying() || board.eliminatedPlayers.has(mySeat)) return;
     if (!confirm('Resign from the game?')) return;
@@ -887,7 +1139,7 @@ function createPlayerCard(playerNum, containerId) {
     stoneCanvas.style.display = 'block';
     const stoneCtx = stoneCanvas.getContext('2d');
     stoneCtx.scale(dpr, dpr);
-    // Draw a simple stone circle (no traitor/triangle decorations on the player card)
+    // Draw a simple stone circle (no triangle decoration on the player card)
     const r = stoneSz / 2;
     const [fr, fg, fb] = stoneColors[playerTurn.color];
     const [sr, sg, sb] = strokeColors[playerTurn.color];
@@ -929,6 +1181,23 @@ function createPlayerCard(playerNum, containerId) {
     powersDisplay.id = `${containerId}-powers-${playerNum}`;
     info.appendChild(powersDisplay);
 
+    const capturesDisplay = document.createElement('div');
+    capturesDisplay.className = 'player-captures';
+    capturesDisplay.id = `${containerId}-captures-${playerNum}`;
+    capturesDisplay.style.display = 'none';
+    info.appendChild(capturesDisplay);
+
+    const hiddenDisplay = document.createElement('div');
+    hiddenDisplay.className = 'player-captures';
+    hiddenDisplay.id = `${containerId}-hidden-${playerNum}`;
+    hiddenDisplay.style.display = 'none';
+    info.appendChild(hiddenDisplay);
+
+    const variantsDisplay = document.createElement('div');
+    variantsDisplay.className = 'player-variant-labels';
+    variantsDisplay.id = `${containerId}-variants-${playerNum}`;
+    info.appendChild(variantsDisplay);
+
     card.appendChild(info);
     return card;
 }
@@ -958,6 +1227,25 @@ function initPlayerCards() {
     }
     
     playerCardsInitialized = true;
+    renderGlobalVariants();
+}
+
+function renderGlobalVariants() {
+    const checks = gameSettings?.legalityChecks || [];
+    const globalChecks = checks.filter(c => c.player === null && (c.type === 'forbiddenChainSize' || c.type === 'captureGo'));
+
+    ['global-variant-labels', 'sidebar-global-variant-labels'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.innerHTML = '';
+        for (const check of globalChecks) {
+            const tag = document.createElement('span');
+            tag.className = 'variant-label';
+            tag.textContent = check.type === 'captureGo' ? `Capture-${check.size}` : `No ${check.size}-chains`;
+            el.appendChild(tag);
+        }
+        el.style.display = globalChecks.length ? '' : 'none';
+    });
 }
 
 // Update a single player card (works for both containers)
@@ -1072,6 +1360,56 @@ function updatePlayerCard(playerNum, prefix, scores) {
             powersDisplay.style.display = 'none';
         }
     }
+
+    const capturesDisplay = document.getElementById(`${prefix}-captures-${playerNum}`);
+    if (capturesDisplay && board && !isLobby()) {
+        const captured = getPlayerCaptures(playerNum);
+        if (captured > 0) {
+            capturesDisplay.textContent = `Lost stones: ${captured}`;
+            capturesDisplay.style.display = '';
+        } else {
+            capturesDisplay.style.display = 'none';
+        }
+    } else if (capturesDisplay) {
+        capturesDisplay.style.display = 'none';
+    }
+
+    const hiddenDisplay = document.getElementById(`${prefix}-hidden-${playerNum}`);
+    if (hiddenDisplay && board && !isLobby()) {
+        const hiddenCount = board.nodes.filter(n => n.onlyVisibleTo === playerNum && n.color > 0).length;
+        if (hiddenCount > 0) {
+            hiddenDisplay.textContent = `Hidden stones: ${hiddenCount}`;
+            hiddenDisplay.style.display = '';
+        } else {
+            hiddenDisplay.style.display = 'none';
+        }
+    } else if (hiddenDisplay) {
+        hiddenDisplay.style.display = 'none';
+    }
+
+    const variantsDisplay = document.getElementById(`${prefix}-variants-${playerNum}`);
+    if (variantsDisplay) {
+        variantsDisplay.innerHTML = '';
+        const checks = gameSettings?.legalityChecks || [];
+        for (const check of checks) {
+            if (check.type === 'forbiddenChainSize' && check.player === playerNum) {
+                const tag = document.createElement('span');
+                tag.className = 'variant-label';
+                tag.textContent = `No ${check.size}-chains`;
+                variantsDisplay.appendChild(tag);
+            } else if (check.type === 'koMaster' && check.player === playerNum) {
+                const tag = document.createElement('span');
+                tag.className = 'variant-label variant-label-green';
+                tag.textContent = 'Ko master';
+                variantsDisplay.appendChild(tag);
+            } else if (check.type === 'captureGo' && check.player === playerNum) {
+                const tag = document.createElement('span');
+                tag.className = 'variant-label';
+                tag.textContent = `Capture-${check.size}`;
+                variantsDisplay.appendChild(tag);
+            }
+        }
+    }
 }
 
 function drawActionPreviewCanvas(container, sequence, stoneSize) {
@@ -1100,7 +1438,7 @@ function drawActionPreviewCanvas(container, sequence, stoneSize) {
 function renderTurnOrder() {
     if (!board) return;
 
-    const showOrder = isPlaying() || isScoring();
+    const showOrder = isPlaying() || isScoring() || isReviewing();
 
     const mainContainer = document.getElementById('turn-order-container');
     const sidebarContainer = document.getElementById('sidebar-turn-order-container');
@@ -1170,6 +1508,86 @@ async function renderPlayerCards() {
 function populateGameControls(container) {
     if (!container) return;
     container.innerHTML = '';
+
+    // Review mode: show sync toggle and controlled actions
+    if (isReviewing()) {
+        if (!board) return;
+
+        // Sync toggle (always visible to everyone)
+        const toggleLabel = document.createElement('label');
+        toggleLabel.className = 'review-sync-toggle';
+        const toggleCheck = document.createElement('input');
+        toggleCheck.type = 'checkbox';
+        toggleCheck.checked = isOnlineReview;
+        toggleCheck.onchange = toggleReviewMode;
+        const toggleTrack = document.createElement('span');
+        toggleTrack.className = 'review-sync-track';
+        const toggleText = document.createElement('span');
+        toggleText.textContent = 'Sync review';
+        toggleLabel.appendChild(toggleCheck);
+        toggleLabel.appendChild(toggleTrack);
+        toggleLabel.appendChild(toggleText);
+        container.appendChild(toggleLabel);
+
+        // Pass / Powers / Back to game always visible; spectators auto-desync when they act
+        if (true) {
+            const reviewPlayer = board.currentTurn?.player;
+            // Powers for the current player
+            if (reviewPlayer && board.getActivePhase() === 'main') {
+                const playerPowers = board.powers[reviewPlayer] || [];
+                for (let pwIdx = 0; pwIdx < playerPowers.length; pwIdx++) {
+                    const pw = playerPowers[pwIdx];
+                    if (pw.usesLeft > 0) {
+                        const actionBtn = document.createElement('button');
+                        actionBtn.className = 'btn-secondary use-action-btn';
+                        actionBtn.onclick = () => {
+                            // Trigger power in review: enter branch and record the power move
+                            if (!inVariation()) {
+                                reviewBranchPoint = viewIndex;
+                                reviewBranchMoves = [];
+                                reviewVariationIndex = 0;
+                            }
+                            reviewBranchMoves.splice(reviewVariationIndex);
+                            reviewBranchMoves.push({ [M_POWER]: pwIdx });
+                            reviewVariationIndex++;
+                            pushOrDesync();
+                            rebuildBoardToView();
+                            renderHistoryControls();
+                            renderGameControls();
+                            renderPlayerCards();
+                            if (p5Instance) p5Instance.redraw();
+                        };
+                        drawActionPreviewCanvas(actionBtn, pw.sequence, 20);
+                        const usesLabel = document.createElement('span');
+                        usesLabel.textContent = `×${pw.usesLeft}`;
+                        actionBtn.appendChild(usesLabel);
+                        container.appendChild(actionBtn);
+                    }
+                }
+            }
+            const passBtn = document.createElement('button');
+            passBtn.className = 'btn-secondary pass-btn';
+            passBtn.textContent = 'Pass';
+            passBtn.onclick = addReviewPass;
+            container.appendChild(passBtn);
+            if (inVariation()) {
+                const backBtn = document.createElement('button');
+                backBtn.className = 'btn-secondary pass-btn';
+                backBtn.textContent = 'Back to game';
+                backBtn.onclick = () => {
+                    discardVariation();
+                    pushOrDesync();
+                    rebuildBoardToView();
+                    renderHistoryControls();
+                    renderGameControls();
+                    renderPlayerCards();
+                    if (p5Instance) p5Instance.redraw();
+                };
+                container.appendChild(backBtn);
+            }
+        }
+        return;
+    }
 
     if (isFinished()) {
         const status = document.createElement('div');
@@ -1278,19 +1696,23 @@ function renderGameControls() {
 }
 
 function renderHistoryControls() {
-    const totalMoves = liveMoves.length;
-    const atStart = viewIndex === 0;
-    const atEnd = viewIndex >= totalMoves;
+    const currentIdx = reviewCurrentIndex();
+    const totalMoves = reviewTotalMoves();
+    const atStart = currentIdx === 0;
+    const atEnd = currentIdx >= totalMoves;
+    const counterLabel = inVariation()
+        ? `var ${reviewVariationIndex} / ${reviewBranchMoves.length}`
+        : `${viewIndex} / ${liveMoves.length}`;
     
     const historyHtml = `
         <div class="history-nav">
-            <button class="history-btn btn-first" ${atStart ? 'disabled' : ''} aria-label="First move">
+            <button class="history-btn btn-first" ${atStart ? 'disabled' : ''} aria-label="${inVariation() ? 'Branch point' : 'First move'}">
                 <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.41 16.59L13.82 12l4.59-4.59L17 6l-6 6 6 6zM6 6h2v12H6z"/></svg>
             </button>
             <button class="history-btn btn-prev" ${atStart ? 'disabled' : ''} aria-label="Previous move">
                 <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
             </button>
-            <span class="history-counter">${viewIndex} / ${totalMoves}</span>
+            <span class="history-counter">${counterLabel}</span>
             <button class="history-btn btn-next" ${atEnd ? 'disabled' : ''} aria-label="Next move">
                 <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
             </button>
@@ -1371,11 +1793,13 @@ function createSketch() {
             p.background(255, 193, 140);
 
             if (board) {
-                const showScoring = isScoring() || isFinished();
+                const reviewing = isReviewing();
+                const showScoring = !reviewing && (isScoring() || isFinished());
                 const viewer = mySeat !== null ? mySeat : null;
-                board.draw(p, showScoring ? deadChains : null, showScoring ? canonicalIndexMap : null, showScoring ? territory : null, viewer);
+                board.draw(p, showScoring ? deadChains : null, showScoring ? canonicalIndexMap : null, showScoring ? territory : null, viewer, reviewing);
 
-                if (hoverNode && canMakeMove() && !showScoring) {
+                const canPlace = reviewing ? !showScoring : (canMakeMove() && !showScoring);
+                if (hoverNode && canPlace) {
                     board.drawGhostStoneAt(p, hoverNode, board.currentTurn.color, board.currentTurn);
                 }
             }
@@ -1387,6 +1811,9 @@ function createSketch() {
             if (isScoring() && !isFinished() && !isViewingHistory) {
                 newHover = board.findHover(p.mouseX, p.mouseY);
                 if (newHover && newHover.color <= 0) newHover = null;
+            } else if (isReviewing()) {
+                newHover = board.findHover(p.mouseX, p.mouseY);
+                if (newHover && newHover.color !== 0) newHover = null; // only empty points
             } else if (!isFinished() && canMakeMove()) {
                 newHover = board.findHover(p.mouseX, p.mouseY);
                 if (newHover) {
@@ -1413,8 +1840,20 @@ function createSketch() {
         };
 
         function handlePress(x, y) {
-            if (!board || isFinished()) return;
-            if (isViewingHistory) return;
+            if (!board) return;
+            if (isViewingHistory && !isReviewing()) return;
+
+            if (isReviewing()) {
+                const clickedNode = board.findHover(x, y);
+                if (clickedNode && clickedNode.color === 0) {
+                    addReviewMove(clickedNode.i);
+                    hoverNode = null;
+                    p.redraw();
+                }
+                return;
+            }
+
+            if (isFinished()) return;
 
             if (isScoring()) {
                 const clickedNode = board.findHover(x, y);
@@ -1431,13 +1870,7 @@ function createSketch() {
                     if (isHiddenFromViewer) {
                         revealStone(clickedNode.i);
                     } else {
-                        const turn = board.currentTurn;
-                        let color = turn.color;
-                        if (turn.traitorColor !== undefined) {
-                            const pct = turn.traitorPercentage ?? 10;
-                            if (Math.random() * 100 < pct) color = turn.traitorColor;
-                        }
-                        addMove(clickedNode.i, color, turn.color);
+                        addMove(clickedNode.i);
                     }
                     hoverNode = null;
                     p.redraw();
@@ -1511,6 +1944,29 @@ function createSketch() {
 // Clock helper functions
 
 function getDisplayTime(playerNum) {
+    // In review mode on the main branch: derive clock from move timestamps like undo does.
+    if (isReviewing() && !inVariation() && gameSettings?.timeSettings?.[playerNum]) {
+        const scratch = Board.fromSettings(gameSettings);
+        let lastTimeLeft = null;
+        for (let i = 0; i < viewIndex && i < liveMoves.length; i++) {
+            const m = liveMoves[i];
+            if (!m) { scratch.applyMoveRecord({}); continue; }
+            const player = scratch.currentTurn?.player;
+            scratch.applyMoveRecord(m);
+            if (m[M_TIME_LEFT] !== undefined && player === playerNum) {
+                lastTimeLeft = m[M_TIME_LEFT];
+            }
+        }
+        return lastTimeLeft; // null if no recorded time yet
+    }
+    // In review mode off the main branch: freeze – return last-known main-branch value
+    if (isReviewing() && inVariation()) {
+        if (!(playerNum in clocks)) return null;
+        const val = clocks[playerNum];
+        // clocks holds the final game value; just display it as paused ms
+        return val >= 1e12 ? Math.max(0, val - serverNow()) : val;
+    }
+    // Normal mode
     if (!(playerNum in clocks)) return null;
     const val = clocks[playerNum];
     if (val >= 1e12) return Math.max(0, val - serverNow());

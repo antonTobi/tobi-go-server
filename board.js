@@ -1,9 +1,9 @@
 // Key constants for all Firebase-serialized objects.
 // Each object type uses its own short keys to save bandwidth.
 // Turn (an instruction in a sequence)
-const T_PLAYER = "p", T_COLOR = "c", T_HIDDEN = "h", T_TRAITOR_COLOR = "t", T_TRAITOR_PCT = "tp";
+const T_PLAYER = "p", T_COLOR = "c", T_HIDDEN = "h";
 // Move record (a move that was made)
-const M_INDEX = "i", M_COLOR = "c", M_TIME_LEFT = "l", M_POWER = "w", M_REVEALED = "r", M_PASS = "s", M_ELIMINATED = "e", M_ELIM_REASON = "er";
+const M_INDEX = "i", M_TIME_LEFT = "l", M_POWER = "w", M_REVEALED = "r", M_PASS = "s", M_ELIMINATED = "e", M_ELIM_REASON = "er";
 // gameSetting
 const GS_BOARD_TYPE = "bt", GS_BOARD_SIZE = "bs", GS_PLAYERS = "n", GS_SETUP_STONES = "ss";
 const GS_SETUP_TURNS = "st", GS_MAIN_SEQ = "ms", GS_POWERS = "pw", GS_KOMI = "k", GS_TIME_SETTINGS = "ts", GS_LEGALITY_CHECKS = "lc";
@@ -12,7 +12,7 @@ const ST_SEQUENCE = "q", ST_REPEAT = "r", PW_USES = "u";
 // timeSetting
 const TS_MAINTIME = "m", TS_INCREMENT = "i", TS_CAP = "c";
 // game state
-const G_CLOCKS = "cl", G_MOVES = "mv", G_REQUEST = "rq", G_PHASE = "ph", G_DEAD_CHAINS = "dc";
+const G_CLOCKS = "cl", G_MOVES = "mv", G_REQUEST = "rq", G_PHASE = "ph", G_DEAD_CHAINS = "dc", G_REVIEW = "rv";
 // request
 const RQ_TYPE = "t", RQ_MOVE_NUMBER = "n", RQ_AGREES = "a";
 
@@ -287,6 +287,7 @@ class Board {
         this.visitedStates = new Set() // Serialized board states for superko checking
         this.moveHistory = []          // [{i}] entries for last-move marker display
         this.eliminatedPlayers = new Set() // Player numbers that have been eliminated
+        this.capturedByColor = {}      // { [colorNum]: count } cumulative stones lost by color
 
 
         // Calculate bounding box and initialize nodes
@@ -358,6 +359,7 @@ class Board {
 
         newBoard.komi = { ...this.komi };
         newBoard.timeSettings = this.timeSettings; // immutable reference is fine
+        newBoard.capturedByColor = { ...this.capturedByColor };
         newBoard.numPlayers = this.numPlayers;
         newBoard.legalityChecks = this.legalityChecks; // immutable shared ref
         newBoard.visitedStates = new Set(this.visitedStates);
@@ -529,16 +531,23 @@ class Board {
             return;
         }
 
-        // Normal place: {i, c}
+        // Normal place: {i}
         const node = this.nodes[move[M_INDEX]];
         if (node) {
-            node.color = move[M_COLOR];
+            const color = this.currentTurn.color;
+
+            // Remove-stone move (color 0): track the removed stone as captured
+            if (color === 0 && node.color > 0) {
+                this.capturedByColor[node.color] = (this.capturedByColor[node.color] || 0) + 1;
+            }
+
+            node.color = color;
             if (this.currentTurn.hidden) {
                 // If the turn is played by a real player use that player number,
                 // otherwise (random player 0) attribute to the color placed.
                 const mover = this.currentTurn.player > 0
                     ? this.currentTurn.player
-                    : move[M_COLOR];
+                    : color;
                 node.onlyVisibleTo = mover;
             } else {
                 node.onlyVisibleTo = null;
@@ -546,15 +555,21 @@ class Board {
 
             // Capture opponent stones
             for (const neighbor of node.neighbors) {
-                if (neighbor.color > 0 && neighbor.color !== move[M_COLOR]) {
+                if (neighbor.color > 0 && neighbor.color !== color) {
                     const chain = this.findChainIfDead(neighbor);
-                    for (const stone of chain) stone.color = 0;
+                    for (const stone of chain) {
+                        this.capturedByColor[stone.color] = (this.capturedByColor[stone.color] || 0) + 1;
+                        stone.color = 0;
+                    }
                 }
             }
 
             // Suicide: if the placed stone's own chain has no liberties, capture it too
             const ownChain = this.findChainIfDead(node);
-            for (const stone of ownChain) stone.color = 0;
+            for (const stone of ownChain) {
+                this.capturedByColor[stone.color] = (this.capturedByColor[stone.color] || 0) + 1;
+                stone.color = 0;
+            }
 
             this.visitedStates.add(this.nodes.map(n => n.color).join(''));
             this.moveHistory.push({ i: move[M_INDEX] });
@@ -580,7 +595,8 @@ class Board {
             clone.nodes[i].color = 0;
             // Superko check
             const stateKey = clone.nodes.map(n => n.color).join('');
-            if (clone.visitedStates.has(stateKey)) return { board: null, reason: 'ko' };
+            const hasKoMaster = (this.legalityChecks || []).some(lc => lc.type === 'koMaster' && lc.player === this.currentTurn.player);
+            if (!hasKoMaster && clone.visitedStates.has(stateKey)) return { board: null, reason: 'ko' };
             // Variant legality checks
             for (const check of (this.legalityChecks || [])) {
                 const reason = runLegalityCheck(check, clone, i, c, this);
@@ -612,7 +628,8 @@ class Board {
 
         // Superko check
         const stateKey = clone.nodes.map(n => n.color).join('');
-        if (clone.visitedStates.has(stateKey)) return { board: null, reason: 'ko' };
+        const hasKoMaster = (this.legalityChecks || []).some(lc => lc.type === 'koMaster' && lc.player === this.currentTurn.player);
+        if (!hasKoMaster && clone.visitedStates.has(stateKey)) return { board: null, reason: 'ko' };
 
         // Variant legality checks
         for (const check of (this.legalityChecks || [])) {
@@ -880,7 +897,7 @@ class Board {
         return true; // 0 or 1 liberties
     }
 
-    draw(p, deadChains = null, canonicalIndexMap = null, territory = null, viewerPlayer = null) {
+    draw(p, deadChains = null, canonicalIndexMap = null, territory = null, viewerPlayer = null, reviewMode = false) {
         p.push();
         p.translate(this.offsetX, this.offsetY);
 
@@ -917,10 +934,11 @@ class Board {
         for (let node of this.nodes) {
             if (node.color > 0) {
                 const showScoring = territory !== null;
-                const hiddenFromViewer = !showScoring && node.onlyVisibleTo !== null && node.onlyVisibleTo !== viewerPlayer;
-                // Skip stones invisible to this viewer (not in scoring mode)
+                const hiddenFromViewer = !showScoring && !reviewMode && node.onlyVisibleTo !== null && node.onlyVisibleTo !== viewerPlayer;
+                // Skip stones invisible to this viewer (not in scoring/review mode)
                 if (hiddenFromViewer) continue;
-                const visibleAsGhost = !showScoring && node.onlyVisibleTo !== null && node.onlyVisibleTo === viewerPlayer;
+                const visibleAsGhost = (!showScoring && node.onlyVisibleTo !== null) &&
+                    (reviewMode || node.onlyVisibleTo === viewerPlayer);
                 const isDead = this.isInDeadChain(node, deadChains, canonicalIndexMap);
                 if (isDead || visibleAsGhost) {
                     p.fill(...stoneColors[node.color], 150);
@@ -947,8 +965,9 @@ class Board {
             if (lastPlaced) {
                 const lastNode = this.nodes[lastPlaced.i];
                 const lastColor = lastNode?.color;
-                // Don't draw the marker if the stone is hidden from the viewer
-                const hiddenFromViewer = lastNode?.onlyVisibleTo !== null
+                // Don't draw the marker if the stone is hidden from the viewer (unless in review mode)
+                const hiddenFromViewer = !reviewMode
+                    && lastNode?.onlyVisibleTo !== null
                     && lastNode?.onlyVisibleTo !== undefined
                     && lastNode?.onlyVisibleTo !== viewerPlayer;
                 if (lastNode && lastColor > 0 && !hiddenFromViewer) {
@@ -1044,15 +1063,6 @@ class Board {
         p.stroke(...strokeColors[color], 150);
         p.strokeWeight(this.sw);
         p.circle(cx, cy, d);
-        // Traitor pie slice
-        if (turn && turn.traitorColor) {
-            const r = d / 2;
-            const dtheta = (turn.traitorPercentage ?? 10) / 100 * Math.PI;
-            const theta = Math.PI / 4;
-            p.fill(...stoneColors[turn.traitorColor], 130);
-            p.stroke(...strokeColors[color], 150);
-            p.arc(cx, cy, d, d, theta - dtheta, theta + dtheta);
-        }
         p.pop();
     }
 
@@ -1153,12 +1163,10 @@ class Board {
 class Turn {
     constructor(playerOrObj = 1, color = 1) {
         if (typeof playerOrObj === 'object') {
-            const { player = 1, color: c = 1, hidden, traitorColor, traitorPercentage } = playerOrObj;
+            const { player = 1, color: c = 1, hidden } = playerOrObj;
             this.player = player;
             this.color = c;
             if (hidden) this.hidden = true;
-            if (traitorColor !== undefined) this.traitorColor = traitorColor;
-            if (traitorPercentage !== undefined) this.traitorPercentage = traitorPercentage;
         } else {
             this.player = playerOrObj;
             this.color = color;
@@ -1171,16 +1179,12 @@ class Turn {
 function compressTurn(t) {
     const ct = { [T_PLAYER]: t.player, [T_COLOR]: t.color };
     if (t.hidden) ct[T_HIDDEN] = true;
-    if (t.traitorColor !== undefined) ct[T_TRAITOR_COLOR] = t.traitorColor;
-    if (t.traitorPercentage !== undefined) ct[T_TRAITOR_PCT] = t.traitorPercentage;
     return ct;
 }
 
 function decompressTurn(ct) {
     const t = { player: ct[T_PLAYER], color: ct[T_COLOR] };
     if (ct[T_HIDDEN]) t.hidden = true;
-    if (ct[T_TRAITOR_COLOR] !== undefined) t.traitorColor = ct[T_TRAITOR_COLOR];
-    if (ct[T_TRAITOR_PCT] !== undefined) t.traitorPercentage = ct[T_TRAITOR_PCT];
     return t;
 }
 
@@ -1245,7 +1249,8 @@ function compressGameSetting(gs) {
     }
     if (gs.legalityChecks?.length) {
         c[GS_LEGALITY_CHECKS] = gs.legalityChecks.map(lc => {
-            const obj = { tp: lc.type, sz: lc.size };
+            const obj = { tp: lc.type };
+            if (lc.size !== undefined) obj.sz = lc.size;
             if (lc.player !== null && lc.player !== undefined) obj.pl = lc.player;
             return obj;
         });
@@ -1301,7 +1306,7 @@ function compressMoveRecord(move) {
     if (move.pass) return { [M_PASS]: 1 };
     if (move.power !== undefined) return { [M_POWER]: move.power };
     if (move.revealed !== undefined) return { [M_REVEALED]: move.revealed };
-    const cm = { [M_INDEX]: move.index, [M_COLOR]: move.color };
+    const cm = { [M_INDEX]: move.index };
     if (move.timeLeft !== undefined) cm[M_TIME_LEFT] = move.timeLeft;
     return cm;
 }
@@ -1311,7 +1316,7 @@ function decompressMoveRecord(cm) {
     if (cm[M_PASS]) return { pass: 1 };
     if (cm[M_POWER] !== undefined) return { power: cm[M_POWER] };
     if (cm[M_REVEALED] !== undefined) return { revealed: cm[M_REVEALED] };
-    const move = { index: cm[M_INDEX], color: cm[M_COLOR] };
+    const move = { index: cm[M_INDEX] };
     if (cm[M_TIME_LEFT] !== undefined) move.timeLeft = cm[M_TIME_LEFT];
     return move;
 }
@@ -1335,15 +1340,6 @@ function drawMoveStone(p, x, y, move, stoneSize) {
         const s = r / 3;
         p.line(x - s, y - s, x + s, y + s);
         p.line(x - s, y + s, x + s, y - s);
-    }
-
-    // Traitor slice
-    if (move.traitorColor) {
-        p.fill(...stoneColors[move.traitorColor]);
-        p.stroke(...strokeColors[move.color]);
-        let dtheta = move.traitorPercentage / 100 * TAU / 2;
-        let theta = TAU / 8;
-        p.arc(x, y, 2 * r, 2 * r, theta - dtheta, theta + dtheta);
     }
 
 
