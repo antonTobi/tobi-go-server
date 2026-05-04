@@ -62,6 +62,8 @@ const isReviewing = () => isFinished();
 const inVariation  = () => reviewBranchPoint !== null;
 // True when this client can drive the shared review (participant + online mode)
 const canControlOnlineReview = () => isOnlineReview && mySeat !== null;
+const isViewingFinalMainPosition = () => !inVariation() && viewIndex >= liveMoves.length;
+const isShowingFinishedTerritory = () => isFinished() && isViewingFinalMainPosition();
 
 // Debug
 window._debugBoard = () => board;
@@ -169,7 +171,6 @@ function initGame() {
             request       = gameData[G_REQUEST]     || null;
             deadChains    = gameData[G_DEAD_CHAINS] || {};
             gameLoaded = true;
-            if (isFinished()) isOnlineReview = true;
 
             requiredSeats = getRequiredSeats(gameSettings);
 
@@ -300,7 +301,6 @@ function handlePhaseChanged(snapshot) {
         canonicalIndexMap = null;
         territory = null;
     }
-    if (isFinished()) isOnlineReview = true;
     renderPlayerCards();
     renderGameControls();
     renderTurnOrder();
@@ -373,7 +373,7 @@ function rebuildBoardToView() {
         renderTurnOrder();
 
         // Only show scoring overlay when on the final main-branch position
-        const viewingFinalMain = !inVariation() && viewIndex >= liveMoves.length;
+        const viewingFinalMain = isViewingFinalMainPosition();
         if ((isScoring() || isFinished()) && viewingFinalMain) {
             canonicalIndexMap = board.computeCanonicalIndexMap();
             territory = board.calculateTerritory(deadChains, canonicalIndexMap);
@@ -478,16 +478,19 @@ function pushOrDesync() {
     }
 }
 
+function exitVariationToBranchPoint() {
+    discardVariation();
+    pushOrDesync();
+    rebuildBoardToView();
+    renderHistoryControls();
+    renderGameControls();
+    renderPlayerCards();
+    if (p5Instance) p5Instance.redraw();
+}
+
 function goToFirstMove() {
     if (inVariation()) {
-        // Return to branch point (= start of variation)
-        reviewVariationIndex = 0;
-        pushOrDesync();
-        rebuildBoardToView();
-        renderHistoryControls();
-        renderGameControls();
-        renderPlayerCards();
-        if (p5Instance) p5Instance.redraw();
+        exitVariationToBranchPoint();
         return;
     }
     if (viewIndex === 0) return;
@@ -504,7 +507,11 @@ function goToFirstMove() {
 function goToPrevMove() {
     if (inVariation()) {
         if (reviewVariationIndex <= 0) {
-            stopAllHolds();
+            exitVariationToBranchPoint();
+            return;
+        }
+        if (reviewVariationIndex === 1) {
+            exitVariationToBranchPoint();
             return;
         }
         reviewVariationIndex--;
@@ -791,34 +798,64 @@ function startGame() {
     gameRef.child(G_PHASE).set('playing');
 }
 
-function enterScoring() {
-    if (!canMakeMove()) return;
+function buildScoringTransitionUpdates(clockOverrides = {}) {
     const updates = {
-        [G_PHASE]:       'scoring',
+        [G_PHASE]: 'scoring',
         [G_DEAD_CHAINS]: null,
-        [G_REQUEST]:     null,
+        [G_REQUEST]: null,
     };
-    // Pause all running clocks (convert expiry timestamps to remaining ms)
+    const pausedClocks = { ...clockOverrides };
     for (const [p, val] of Object.entries(clocks)) {
-        if (val >= 1e12) {
-            updates[`${G_CLOCKS}/${p}`] = Math.max(0, val - serverNow());
+        if (pausedClocks[p] === undefined && val >= 1e12) {
+            pausedClocks[p] = Math.max(0, val - serverNow());
         }
     }
-    gameRef.update(updates);
+    for (const [p, val] of Object.entries(pausedClocks)) {
+        updates[`${G_CLOCKS}/${p}`] = val;
+    }
+    return updates;
+}
+
+function enterScoring() {
+    if (!canMakeMove()) return;
+    gameRef.update(buildScoringTransitionUpdates());
+}
+
+function findAutoScoringPassStartIndex() {
+    if (!board) return null;
+    const passCount = board.order.length;
+    if (passCount <= 0 || liveMoves.length < passCount) return null;
+    const startIndex = liveMoves.length - passCount;
+    for (let i = startIndex; i < liveMoves.length; i++) {
+        if (!liveMoves[i]?.[M_PASS]) return null;
+    }
+    return startIndex;
 }
 
 function exitScoring() {
     const updates = { [G_PHASE]: 'playing' };
-    // Restart the active player's clock as a running expiry timestamp
-    if (board && gameSettings?.timeSettings) {
-        const playerNum = board.currentTurn?.player;
+    const passStartIndex = findAutoScoringPassStartIndex();
+    if (passStartIndex === null) return;
+
+    for (let i = passStartIndex; i < liveMoves.length; i++) {
+        updates[`${G_MOVES}/${i}`] = null;
+    }
+
+    // Resume the player-to-move clock from the paused scoring values after rewinding the passes.
+    if (gameSettings?.timeSettings) {
+        const rewindBoard = Board.fromSettings(gameSettings);
+        for (let i = 0; i < passStartIndex; i++) {
+            if (liveMoves[i]) rewindBoard.applyMoveRecord(liveMoves[i]);
+        }
+        const playerNum = rewindBoard.currentTurn?.player;
         if (playerNum > 0 && gameSettings.timeSettings[playerNum]) {
             const val = clocks[playerNum];
-            if (val !== undefined && val !== null && val < 1e12 && val > 0) {
+            if (val !== undefined && val !== null && val > 0) {
                 updates[`${G_CLOCKS}/${playerNum}`] = serverNow() + val;
             }
         }
     }
+
     gameRef.update(updates);
 }
 
@@ -868,8 +905,10 @@ function processRandomMoves() {
     const candidates = board.nodes.filter(node => board.tryMove(node.i, currentTurn.color) !== null);
 
     let moveRecord;
+    let nextBoard = null;
     if (candidates.length === 0) {
         moveRecord = { [M_PASS]: 1 };
+        nextBoard = board.tryPass();
     } else {
         const picked = candidates[Math.floor(Math.random() * candidates.length)];
         moveRecord = { [M_INDEX]: picked.i };
@@ -878,6 +917,9 @@ function processRandomMoves() {
 
     const updates = {};
     updates[`${G_MOVES}/${liveMoves.length}`] = moveRecord;
+    if (nextBoard && nextBoard.consecutiveMainPasses >= nextBoard.order.length) {
+        Object.assign(updates, buildScoringTransitionUpdates());
+    }
     gameRef.update(updates, (error) => {
         if (error) {
             console.error('Random move update failed:', error);
@@ -994,15 +1036,16 @@ function addPass() {
 
     const playerNum = board.currentTurn.player;
     const moveRecord = { [M_PASS]: 1 };
+    const nextBoard = board.tryPass();
+    const shouldEnterScoring = nextBoard && nextBoard.consecutiveMainPasses >= nextBoard.order.length;
     const updates = {};
     updates[`${G_MOVES}/${liveMoves.length}`] = moveRecord;
 
     if (gameSettings.timeSettings && playerNum > 0) {
         const timeLeft = computeTimeLeft(playerNum);
         if (timeLeft !== null) updates[`${G_CLOCKS}/${playerNum}`] = timeLeft;
-        const nextBoard = board.tryPass();
         const nextTurn = nextBoard?.currentTurn;
-        if (nextTurn && nextTurn.player > 0 && gameSettings.timeSettings[nextTurn.player]) {
+        if (!shouldEnterScoring && nextTurn && nextTurn.player > 0 && gameSettings.timeSettings[nextTurn.player]) {
             const nextPlayerClock = clocks[nextTurn.player];
             if (nextPlayerClock !== undefined && nextPlayerClock !== null) {
                 const remaining = nextPlayerClock >= 1e12
@@ -1011,6 +1054,12 @@ function addPass() {
                 updates[`${G_CLOCKS}/${nextTurn.player}`] = serverNow() + remaining;
             }
         }
+        if (shouldEnterScoring) {
+            const clockOverrides = timeLeft !== null ? { [playerNum]: timeLeft } : {};
+            Object.assign(updates, buildScoringTransitionUpdates(clockOverrides));
+        }
+    } else if (shouldEnterScoring) {
+        Object.assign(updates, buildScoringTransitionUpdates());
     }
 
     gameRef.update(updates, (error) => {
@@ -1248,6 +1297,15 @@ function renderGlobalVariants() {
     });
 }
 
+function shouldWarnLowTime(playerNum, ms) {
+    if (!isPlaying() || !board) return false;
+    if (mySeat === null || mySeat !== playerNum) return false;
+    if (board.currentTurn?.player !== playerNum) return false;
+    if (!gameSettings?.timeSettings?.[playerNum]) return false;
+    if (!(playerNum in clocks) || clocks[playerNum] < 1e12) return false;
+    return ms > 0 && ms <= 15000;
+}
+
 // Update a single player card (works for both containers)
 function updatePlayerCard(playerNum, prefix, scores) {
     const odIndex = seats[playerNum];
@@ -1274,6 +1332,12 @@ function updatePlayerCard(playerNum, prefix, scores) {
     } else {
         card.classList.add('empty');
     }
+
+    const warningMs = getDisplayTime(playerNum);
+    const shouldWarnCard = warningMs !== null && shouldWarnLowTime(playerNum, warningMs);
+    const flashOn = shouldWarnCard && (Math.floor(warningMs / 500) % 2 === 0);
+    card.classList.toggle('time-warning', shouldWarnCard);
+    card.classList.toggle('time-warning-flash', flashOn);
 
     const nameDisplay = document.getElementById(`${prefix}-name-${playerNum}`);
     if (nameDisplay) {
@@ -1329,14 +1393,15 @@ function updatePlayerCard(playerNum, prefix, scores) {
 
     const clockDisplay = document.getElementById(`${prefix}-clock-${playerNum}`);
     if (clockDisplay) {
-        const ms = getDisplayTime(playerNum);
+        const ms = warningMs;
         if (ms !== null && gameSettings?.timeSettings?.[playerNum]) {
-            clockDisplay.textContent = formatTime(ms);
+            clockDisplay.textContent = formatTime(ms, shouldWarnCard);
             clockDisplay.style.display = '';
             const isRunning = clocks[playerNum] >= 1e12;
             clockDisplay.classList.toggle('clock-paused', !isRunning);
         } else {
             clockDisplay.style.display = 'none';
+            clockDisplay.classList.remove('clock-paused');
         }
     }
 
@@ -1529,6 +1594,8 @@ function populateGameControls(container) {
         toggleLabel.appendChild(toggleText);
         container.appendChild(toggleLabel);
 
+        if (isShowingFinishedTerritory()) return;
+
         // Pass / Powers / Back to game always visible; spectators auto-desync when they act
         if (true) {
             const reviewPlayer = board.currentTurn?.player;
@@ -1613,28 +1680,23 @@ function populateGameControls(container) {
         status.textContent = 'Waiting for host to start...';
         container.appendChild(status);
     } else if (isScoring()) {
-        const btnContainer = document.createElement('div');
-        btnContainer.className = 'scoring-buttons';
-
         if (mySeat !== null) {
             const hasAccepted = request?.[RQ_AGREES]?.[mySeat] === true;
             const acceptBtn = document.createElement('button');
-            acceptBtn.className = 'btn-primary accept-score-btn';
+            acceptBtn.className = 'accept-score-btn';
             acceptBtn.textContent = hasAccepted ? 'Accepted ✓' : 'Accept Score';
             acceptBtn.disabled = hasAccepted || acceptCooldown;
             if (!hasAccepted && !acceptCooldown) {
                 acceptBtn.onclick = acceptScore;
             }
-            btnContainer.appendChild(acceptBtn);
+            container.appendChild(acceptBtn);
         }
 
         const exitBtn = document.createElement('button');
         exitBtn.className = 'btn-secondary exit-scoring-btn';
         exitBtn.textContent = 'Back to Game';
         exitBtn.onclick = exitScoring;
-        btnContainer.appendChild(exitBtn);
-
-        container.appendChild(btnContainer);
+        container.appendChild(exitBtn);
     } else {
         const atEnd = viewIndex >= liveMoves.length;
         const canUndo = (mySeat !== null || debugMode) && isViewingHistory && !atEnd && isPlaying();
@@ -1679,11 +1741,6 @@ function populateGameControls(container) {
                 container.appendChild(resignBtn);
             }
 
-            const scoringBtn = document.createElement('button');
-            scoringBtn.className = 'btn-secondary enter-scoring-btn';
-            scoringBtn.textContent = 'Go to Scoring';
-            scoringBtn.onclick = enterScoring;
-            container.appendChild(scoringBtn);
         }
     }
 }
@@ -1747,6 +1804,24 @@ function renderHistoryControls() {
 
 function createSketch() {
     return (p) => {
+        let boardResizeObserver = null;
+
+        function resizeBoardToContainer() {
+            const container = document.getElementById('board-container');
+            if (!container) return;
+
+            const availWidth = container.clientWidth || container.offsetWidth;
+            const availHeight = container.clientHeight || container.offsetHeight;
+            const size = Math.min(availWidth, availHeight);
+
+            if (size > 0 && (p.width !== size || p.height !== size)) {
+                p.resizeCanvas(size, size);
+            }
+            if (size > 0 && board) {
+                board.calculateTransform(p.width, p.height);
+                p.redraw();
+            }
+        }
 
         p.setup = function() {
             // Use default pixel density for crisp rendering on high-DPI screens
@@ -1773,8 +1848,13 @@ function createSketch() {
             
             // Re-check size after a short delay to handle late layout
             setTimeout(() => {
-                p.windowResized();
+                resizeBoardToContainer();
             }, 100);
+
+            if (typeof ResizeObserver !== 'undefined' && container) {
+                boardResizeObserver = new ResizeObserver(() => resizeBoardToContainer());
+                boardResizeObserver.observe(container);
+            }
         };
         
         function initializeBoard() {
@@ -1793,8 +1873,9 @@ function createSketch() {
             p.background(255, 193, 140);
 
             if (board) {
-                const reviewing = isReviewing();
-                const showScoring = !reviewing && (isScoring() || isFinished());
+                const showingFinishedTerritory = isShowingFinishedTerritory();
+                const reviewing = isReviewing() && !showingFinishedTerritory;
+                const showScoring = isScoring() || showingFinishedTerritory;
                 const viewer = mySeat !== null ? mySeat : null;
                 board.draw(p, showScoring ? deadChains : null, showScoring ? canonicalIndexMap : null, showScoring ? territory : null, viewer, reviewing);
 
@@ -1811,6 +1892,8 @@ function createSketch() {
             if (isScoring() && !isFinished() && !isViewingHistory) {
                 newHover = board.findHover(p.mouseX, p.mouseY);
                 if (newHover && newHover.color <= 0) newHover = null;
+            } else if (isShowingFinishedTerritory()) {
+                newHover = null;
             } else if (isReviewing()) {
                 newHover = board.findHover(p.mouseX, p.mouseY);
                 if (newHover && newHover.color !== 0) newHover = null; // only empty points
@@ -1842,6 +1925,8 @@ function createSketch() {
         function handlePress(x, y) {
             if (!board) return;
             if (isViewingHistory && !isReviewing()) return;
+
+            if (isShowingFinishedTerritory()) return;
 
             if (isReviewing()) {
                 const clickedNode = board.findHover(x, y);
@@ -1894,19 +1979,18 @@ function createSketch() {
         };
 
         p.windowResized = function() {
-            const container = document.getElementById('board-container');
-            const availWidth = container.clientWidth || container.offsetWidth;
-            const availHeight = container.clientHeight || container.offsetHeight;
-            const size = Math.min(availWidth, availHeight);
-            
-            if (size > 0) {
-                p.resizeCanvas(size, size);
-                if (board) {
-                    board.calculateTransform(p.width, p.height);
-                    p.redraw();
-                }
-            }
+            resizeBoardToContainer();
         };
+
+        p.remove = (function(originalRemove) {
+            return function() {
+                if (boardResizeObserver) {
+                    boardResizeObserver.disconnect();
+                    boardResizeObserver = null;
+                }
+                return originalRemove.call(this);
+            };
+        })(p.remove);
 
         p.keyPressed = function() {
             if (p.key === 'd') {
@@ -1973,14 +2057,18 @@ function getDisplayTime(playerNum) {
     return val;
 }
 
-function formatTime(ms) {
+function formatTime(ms, showTenths = false) {
     if (ms <= 0) ms = 0;
     const totalSeconds = Math.floor(ms / 1000);
     const hours = Math.floor(totalSeconds / 3600);
     const mins = Math.floor((totalSeconds % 3600) / 60);
     const secs = totalSeconds % 60;
+    const tenths = Math.floor((ms % 1000) / 100);
     if (hours > 0) {
         return `${hours}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    }
+    if (showTenths) {
+        return `${mins}:${String(secs).padStart(2, '0')}.${tenths}`;
     }
     return `${mins}:${String(secs).padStart(2, '0')}`;
 }
@@ -2009,7 +2097,7 @@ function startClockInterval() {
                 }
             }
         }
-    }, 200);
+    }, 100);
 }
 
 function computeTimeLeft(playerNum) {

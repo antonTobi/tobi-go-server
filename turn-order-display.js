@@ -51,6 +51,11 @@ class TurnOrderDisplay {
         return Math.max(0, this._totalWidth() - this._viewportWidth());
     }
 
+    _contentOffsetX() {
+        if (this._maxScrollX() > 0) return 0;
+        return Math.max(0, (this._viewportWidth() - this._totalWidth()) / 2);
+    }
+
     _scrollX() {
         if (this.activeIndex < 0 || this.sequence.length === 0) return 0;
 
@@ -90,6 +95,7 @@ class TurnOrderDisplay {
                 const sw = self._slotWidth();
                 const cy = p.height / 2;
                 const scrollX = self._scrollX();
+                const offsetX = self._contentOffsetX();
                 const startX = scrollX - sw;
                 const endX = scrollX + p.width + sw;
 
@@ -97,7 +103,7 @@ class TurnOrderDisplay {
                     const move = self.sequence[i];
                     const rawX = i * sw + sw / 2 + self.padding / 2;
                     if (rawX < startX || rawX > endX) continue;
-                    const cx = rawX - scrollX;
+                    const cx = rawX - scrollX + offsetX;
 
                     // Active indicator
                     if (i === self.activeIndex) {

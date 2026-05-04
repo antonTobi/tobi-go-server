@@ -288,6 +288,7 @@ class Board {
         this.moveHistory = []          // [{i}] entries for last-move marker display
         this.eliminatedPlayers = new Set() // Player numbers that have been eliminated
         this.capturedByColor = {}      // { [colorNum]: count } cumulative stones lost by color
+        this.consecutiveMainPasses = 0 // Count of consecutive passes taken on main-sequence turns
 
 
         // Calculate bounding box and initialize nodes
@@ -365,6 +366,7 @@ class Board {
         newBoard.visitedStates = new Set(this.visitedStates);
         newBoard.moveHistory = this.moveHistory.map(m => ({ ...m }));
         newBoard.eliminatedPlayers = new Set(this.eliminatedPlayers);
+        newBoard.consecutiveMainPasses = this.consecutiveMainPasses;
 
         newBoard.boundingBox = { ...this.boundingBox };
         newBoard.width = this.width;
@@ -448,6 +450,10 @@ class Board {
         return this.currentSequence.type;
     }
 
+    resetConsecutiveMainPasses() {
+        this.consecutiveMainPasses = 0;
+    }
+
     calculateTransform(canvasWidth, canvasHeight) {
         // Add 1 unit margin on each side for stone radius
         const marginWidth = this.width + 1;
@@ -498,12 +504,16 @@ class Board {
     // Apply a compressed move record in-place (used for history replay — trusts the record).
     // move is one of: {i,c[,l]} | {s:1} | {w:N} | {r:N}
     applyMoveRecord(move) {
+        const isMainTurn = this.currentSequence === null;
+
         if (move[M_PASS]) {
+            if (isMainTurn) this.consecutiveMainPasses++;
             this.advanceMoveOrder();
             return;
         }
 
         if (move[M_POWER] !== undefined) {
+            if (isMainTurn) this.resetConsecutiveMainPasses();
             const playerNum = this.currentTurn.player;
             const powerIndex = move[M_POWER];
             if (this.powers[playerNum]?.[powerIndex]) {
@@ -534,6 +544,7 @@ class Board {
         // Normal place: {i}
         const node = this.nodes[move[M_INDEX]];
         if (node) {
+            if (isMainTurn) this.resetConsecutiveMainPasses();
             const color = this.currentTurn.color;
 
             // Remove-stone move (color 0): track the removed stone as captured
@@ -604,6 +615,7 @@ class Board {
             }
             clone.visitedStates.add(stateKey);
             clone.moveHistory.push({ i });
+            if (clone.currentSequence === null) clone.resetConsecutiveMainPasses();
             clone.advanceMoveOrder();
             return { board: clone, reason: null };
         }
@@ -644,6 +656,7 @@ class Board {
         }
         clone.visitedStates.add(stateKey);
         clone.moveHistory.push({ i });
+        if (clone.currentSequence === null) clone.resetConsecutiveMainPasses();
         clone.advanceMoveOrder();
         return { board: clone, reason: null };
     }
@@ -659,6 +672,7 @@ class Board {
     // Returns a new board clone after passing. Always legal.
     tryPass() {
         const clone = this.clone();
+        if (clone.currentSequence === null) clone.consecutiveMainPasses++;
         clone.advanceMoveOrder();
         return clone;
     }
@@ -672,6 +686,7 @@ class Board {
         if (playerPowers[powerIndex].usesLeft <= 0) return null;
 
         const clone = this.clone();
+        clone.resetConsecutiveMainPasses();
         clone.powers[playerNum][powerIndex].usesLeft--;
         clone.currentSequence = { type: 'power', playerNum, powerIndex };
         clone.sequenceIndex = 0;

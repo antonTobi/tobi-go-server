@@ -231,14 +231,6 @@ body {
     height: 36px; /* Fixed height */
 }
 
-/* Scoring buttons container */
-.scoring-buttons {
-    display: flex;
-    gap: 8px;
-    justify-content: center;
-    align-items: center;
-}
-
 #bottom-game-controls .game-status {
     font-size: 13px;
     padding: 6px 12px;
@@ -246,15 +238,23 @@ body {
 }
 
 #bottom-game-controls .btn-primary,
-#bottom-game-controls .btn-secondary {
+#bottom-game-controls .btn-secondary,
+#bottom-game-controls .accept-score-btn {
     padding: 6px 14px;
     font-size: 13px;
     height: 32px;
     line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    white-space: nowrap;
 }
 
-#bottom-game-controls .accept-score-btn {
-    width: auto;
+#bottom-game-controls .accept-score-btn,
+#bottom-game-controls .exit-scoring-btn {
+    flex: 1 1 0;
+    width: 100%;
+    min-width: 0;
     margin-top: 0;
 }
 
@@ -354,6 +354,16 @@ body {
 .player-card.winner {
     border-color: #f5a623;
     background: #fffbf0;
+}
+
+.player-card.time-warning {
+    border-color: #d32f2f;
+    background: #ffebee;
+}
+
+.player-card.time-warning.time-warning-flash {
+    background: #ffcdd2;
+    box-shadow: 0 0 0 2px rgba(211, 47, 47, 0.16);
 }
 
 .player-stone {
@@ -1571,8 +1581,8 @@ h2 {
 
 .accept-score-btn {
     width: 100%;
-    padding: 12px 16px;
-    font-size: 1em;
+    padding: 10px 16px;
+    font-size: 0.9em;
     font-weight: 600;
     background: linear-gradient(135deg, #28a745 0%, #218838 100%);
     color: white;
@@ -1581,6 +1591,7 @@ h2 {
     cursor: pointer;
     transition: opacity 0.2s, transform 0.1s;
     margin-top: 10px;
+    margin-bottom: 0;
 }
 
 .accept-score-btn:hover:not(:disabled) {
@@ -2132,14 +2143,18 @@ h2 {
     }
     
     #bottom-game-controls .btn-primary,
-    #bottom-game-controls .btn-secondary {
+    #bottom-game-controls .btn-secondary,
+    #bottom-game-controls .accept-score-btn {
         padding: 10px 18px;
         font-size: 15px;
         height: 40px;
     }
 
-    #bottom-game-controls .accept-score-btn {
-        width: auto;
+    #bottom-game-controls .accept-score-btn,
+    #bottom-game-controls .exit-scoring-btn {
+        flex: 1 1 0;
+        width: 100%;
+        min-width: 0;
         margin-top: 0;
     }
     
