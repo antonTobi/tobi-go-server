@@ -892,7 +892,7 @@ h2 {
 }
 
 .move-edit-popup {
-    position: absolute;
+    position: fixed;
     background: #fff;
     border: 1px solid #ddd;
     border-radius: 10px;

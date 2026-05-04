@@ -367,37 +367,39 @@ class MoveListWidget {
         const move = this.moves[idx];
         if (!move) return;
 
-        const isRebuild = (this.selectedIndex === idx && this.popup.style.display !== 'none');
         this.popup.style.display = '';
         this.popup.innerHTML = this._buildPopupHTML(move, idx);
+        this._attachPopupListeners(idx);
+        this._positionPopup(idx);
+    }
 
-        if (!isRebuild) {
-            // Position relative to viewport so the popup escapes any scroll/overflow containers.
-            const containerRect = this.container.getBoundingClientRect();
-            const sw = this._slotWidth();
-            const idealLeft = containerRect.left + idx * sw + sw / 2;
-            const vw = window.innerWidth;
-            const vh = window.innerHeight;
+    _positionPopup(idx) {
+        // Render off-screen first so we can measure the fully populated popup.
+        this.popup.style.top = '-9999px';
+        this.popup.style.left = '-9999px';
+        this.popup.style.transform = 'none';
 
-            // Force reflow so offsetWidth/Height reflect the new content.
-            void this.popup.offsetHeight;
-            const popupWidth = this.popup.offsetWidth;
-            const popupHeight = this.popup.offsetHeight;
+        const containerRect = this.container.getBoundingClientRect();
+        const canvasRect = this.p5Instance.canvas.getBoundingClientRect();
+        const sw = this._slotWidth();
+        const idealLeft = containerRect.left + idx * sw + sw / 2;
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
 
-            let left = idealLeft - popupWidth / 2;
-            left = Math.max(4, Math.min(left, vw - popupWidth - 4));
+        const popupWidth = this.popup.offsetWidth;
+        const popupHeight = this.popup.offsetHeight;
 
-            let top = containerRect.bottom + 4;
-            if (vw < 768 || top + popupHeight > vh - 4) {
-                top = containerRect.top - popupHeight - 4;
-            }
+        let left = idealLeft - popupWidth / 2;
+        left = Math.max(4, Math.min(left, vw - popupWidth - 4));
 
-            this.popup.style.left = left + 'px';
-            this.popup.style.top = top + 'px';
-            this.popup.style.transform = 'none';
+        let top = canvasRect.bottom + 4;
+        if (vw < 768 || top + popupHeight > vh - 4) {
+            top = canvasRect.top - popupHeight - 4;
         }
 
-        this._attachPopupListeners(idx);
+        this.popup.style.left = left + 'px';
+        this.popup.style.top = top + 'px';
+        this.popup.style.transform = 'none';
     }
 
     _closePopup() {
