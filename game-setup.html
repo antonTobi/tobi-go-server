@@ -63,14 +63,15 @@
             <div class="setup-panel variants-panel active" data-panel="variants">
                 <h2 class="panel-title">Game Settings</h2>
                 <div id="variants-list" class="variants-list"></div>
+                <div class="variant-quick-actions">
+                    <button type="button" class="btn-secondary btn-add-small" data-quick-add="setup">Add setup</button>
+                    <button type="button" class="btn-secondary btn-add-small" data-quick-add="power">Add power</button>
+                    <button type="button" class="btn-secondary btn-add-small" data-quick-add="clock">Add clock</button>
+                    <button type="button" class="btn-secondary btn-add-small" data-quick-add="komi">Add komi</button>
+                </div>
                 <div class="add-variant-wrap">
-                    <button type="button" class="btn-secondary btn-add-small" id="add-variant-btn">+ Add</button>
+                    <button type="button" class="btn-secondary btn-add-small" id="add-variant-btn">+ Add variant</button>
                     <div class="add-variant-menu" id="add-variant-menu" style="display:none">
-                        <button type="button" data-type="turn-order">Custom turn order</button>
-                        <button type="button" data-type="setup">Setup sequence</button>
-                        <button type="button" data-type="power">Power</button>
-                        <button type="button" data-type="clock">Clock</button>
-                        <button type="button" data-type="komi">Komi</button>
                         <button type="button" data-type="legalitycheck">Forbidden chain-size</button>
                         <button type="button" data-type="komaster">Ko master</button>
                         <button type="button" data-type="capturecheck">Capture go</button>

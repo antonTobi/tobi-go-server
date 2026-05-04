@@ -37,6 +37,7 @@ if (document.readyState === 'loading') {
 }
 
 function initSetupPage() {
+    const setupContent = document.querySelector('.setup-content');
     document.getElementById('board-type').addEventListener('change', onBoardTypeChange);
     document.getElementById('board-size').addEventListener('input', validateAndUpdateBoardSize);
     document.getElementById('game-setup-form').addEventListener('submit', handleCreateGame);
@@ -59,29 +60,102 @@ function initSetupPage() {
     // Add-variant button / menu
     const addBtn = document.getElementById('add-variant-btn');
     const addMenu = document.getElementById('add-variant-menu');
+    const menuGap = 4;
+    const menuMargin = 8;
+
+    document.querySelectorAll('[data-quick-add]').forEach(btn => {
+        btn.addEventListener('click', () => addVariant(btn.dataset.quickAdd));
+    });
+
+    function closeAddMenu() {
+        addMenu.style.display = 'none';
+    }
+
+    function positionAddMenu() {
+        if (addMenu.style.display === 'none') return;
+
+        addMenu.style.position = 'fixed';
+        addMenu.style.top = '-9999px';
+        addMenu.style.left = '-9999px';
+        addMenu.style.maxHeight = '';
+
+        const btnRect = addBtn.getBoundingClientRect();
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const menuWidth = addMenu.offsetWidth;
+        const menuHeight = addMenu.offsetHeight;
+
+        let left = btnRect.left;
+        left = Math.max(menuMargin, Math.min(left, vw - menuWidth - menuMargin));
+
+        const belowTop = btnRect.bottom + menuGap;
+        const belowSpace = vh - belowTop - menuMargin;
+        const aboveSpace = btnRect.top - menuGap - menuMargin;
+
+        let top;
+        let maxHeight;
+
+        if (menuHeight <= belowSpace || belowSpace >= aboveSpace) {
+            top = belowTop;
+            if (menuHeight > belowSpace) {
+                maxHeight = Math.max(120, belowSpace);
+            }
+        } else {
+            if (menuHeight <= aboveSpace) {
+                top = btnRect.top - menuHeight - menuGap;
+            } else {
+                maxHeight = Math.max(120, aboveSpace);
+                top = btnRect.top - maxHeight - menuGap;
+            }
+        }
+
+        if (maxHeight) {
+            addMenu.style.maxHeight = `${Math.floor(maxHeight)}px`;
+        }
+
+        top = Math.max(menuMargin, Math.min(top, vh - addMenu.offsetHeight - menuMargin));
+
+        addMenu.style.left = left + 'px';
+        addMenu.style.top = top + 'px';
+    }
+
     addBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         const open = addMenu.style.display !== 'none';
-        addMenu.style.display = open ? 'none' : '';
+        if (open) {
+            closeAddMenu();
+            return;
+        }
+        addMenu.style.display = '';
+        positionAddMenu();
     });
     addMenu.querySelectorAll('[data-type]').forEach(btn => {
         btn.addEventListener('click', () => {
             addVariant(btn.dataset.type);
-            addMenu.style.display = 'none';
+            closeAddMenu();
         });
     });
     document.addEventListener('mousedown', (e) => {
         if (!addBtn.contains(e.target) && !addMenu.contains(e.target)) {
-            addMenu.style.display = 'none';
+            closeAddMenu();
         }
     });
+
+    addVariant('turn-order');
 
     boardType = document.getElementById('board-type').value;
     validateBoardSize();
     updateSpinnerState();
     updatePreview();
 
-    window.addEventListener('resize', handleResize);
+    window.addEventListener('resize', () => {
+        handleResize();
+        positionAddMenu();
+    });
+    window.addEventListener('scroll', positionAddMenu, { passive: true });
+    if (setupContent) {
+        setupContent.addEventListener('scroll', positionAddMenu, { passive: true });
+    }
     handleResize();
     requestAnimationFrame(() => {
         handleResize();
@@ -90,13 +164,18 @@ function initSetupPage() {
 }
 
 function addVariant(type) {
+    if (type === 'turn-order') {
+        const existingTurnOrder = variantEntries.find(entry => entry.type === 'turn-order');
+        if (existingTurnOrder) return existingTurnOrder;
+    }
+
     const id = ++variantCounter;
-    const entry = { id, type };
-    variantEntries.push(entry);
+    const isLocked = type === 'turn-order';
+    const entry = { id, type, locked: isLocked };
 
     const typeLabels = {
         'turn-order': 'Turn Order',
-        'setup':      'Setup Sequence',
+        'setup':      'Setup',
         'power':      'Power',
         'clock':      'Clock',
         'komi':       'Komi',
@@ -107,26 +186,45 @@ function addVariant(type) {
 
     const bodyId = `variant-body-${id}`;
     const el = document.createElement('div');
-    el.className = 'variant-entry';
+    el.className = `variant-entry${isLocked ? ' locked-variant' : ''}`;
     el.dataset.id = id;
-    el.innerHTML = `
-        <div class="variant-entry-header">
-            <span class="variant-type-label">${typeLabels[type]}</span>
+    const actionsHtml = isLocked
+        ? ''
+        : `
             <div class="variant-entry-actions">
                 <button type="button" class="variant-move-btn" title="Move up">↑</button>
                 <button type="button" class="variant-move-btn" title="Move down">↓</button>
                 <button type="button" class="btn-remove-small variant-delete">✕</button>
             </div>
+        `;
+    el.innerHTML = `
+        <div class="variant-entry-header">
+            <span class="variant-type-label">${typeLabels[type]}</span>
+            ${actionsHtml}
         </div>
         <div class="variant-entry-body" id="${bodyId}"></div>
     `;
-    document.getElementById('variants-list').appendChild(el);
-    entry.element = el;
 
-    const moveBtns = el.querySelectorAll('.variant-move-btn');
-    moveBtns[0].addEventListener('click', () => moveVariant(id, -1));
-    moveBtns[1].addEventListener('click', () => moveVariant(id, 1));
-    el.querySelector('.variant-delete').addEventListener('click', () => removeVariant(id));
+    entry.element = el;
+    if (isLocked) {
+        variantEntries.unshift(entry);
+    } else {
+        variantEntries.push(entry);
+    }
+
+    const variantsList = document.getElementById('variants-list');
+    if (isLocked) {
+        variantsList.prepend(el);
+    } else {
+        variantsList.appendChild(el);
+    }
+
+    if (!isLocked) {
+        const moveBtns = el.querySelectorAll('.variant-move-btn');
+        moveBtns[0].addEventListener('click', () => moveVariant(id, -1));
+        moveBtns[1].addEventListener('click', () => moveVariant(id, 1));
+        el.querySelector('.variant-delete').addEventListener('click', () => removeVariant(id));
+    }
 
     buildVariantBody(entry, bodyId);
 
@@ -163,6 +261,7 @@ function buildVariantBody(entry, containerId) {
                 allowEmpty: true,
                 defaultMove: { player: 1, color: 1 },
             });
+            entry.widget.setMoves([{ player: 1, color: 1 }]);
             entry.repeatInputId = repeatId;
             break;
         }
@@ -328,8 +427,10 @@ function buildVariantBody(entry, containerId) {
 function moveVariant(id, direction) {
     const idx = variantEntries.findIndex(e => e.id === id);
     if (idx === -1) return;
+    if (variantEntries[idx].locked) return;
     const newIdx = idx + direction;
     if (newIdx < 0 || newIdx >= variantEntries.length) return;
+    if (variantEntries[newIdx].locked) return;
     [variantEntries[idx], variantEntries[newIdx]] = [variantEntries[newIdx], variantEntries[idx]];
     const list = document.getElementById('variants-list');
     for (const entry of variantEntries) list.appendChild(entry.element);
@@ -339,6 +440,7 @@ function removeVariant(id) {
     const idx = variantEntries.findIndex(e => e.id === id);
     if (idx === -1) return;
     const entry = variantEntries[idx];
+    if (entry.locked) return;
     if (entry.widget) entry.widget.destroy();
     entry.element.remove();
     variantEntries.splice(idx, 1);
