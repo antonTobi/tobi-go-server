@@ -1,6 +1,5 @@
 // Reusable graphical move list editor
 // Renders a horizontal list of Turn tokens on a p5 canvas with a DOM popup for editing.
-// Each turn has: player (0-5), color (1-5).
 
 class MoveListWidget {
     constructor(containerId, options = {}) {
@@ -377,18 +376,20 @@ class MoveListWidget {
             const containerRect = this.container.getBoundingClientRect();
             const sw = this._slotWidth();
             const idealLeft = containerRect.left + idx * sw + sw / 2;
-            const popupWidth = this.popup.offsetWidth || 260;
-            const popupHeight = this.popup.offsetHeight || 200;
             const vw = window.innerWidth;
             const vh = window.innerHeight;
+
+            // Force reflow so offsetWidth/Height reflect the new content.
+            void this.popup.offsetHeight;
+            const popupWidth = this.popup.offsetWidth;
+            const popupHeight = this.popup.offsetHeight;
 
             let left = idealLeft - popupWidth / 2;
             left = Math.max(4, Math.min(left, vw - popupWidth - 4));
 
             let top = containerRect.bottom + 4;
-            if (top + popupHeight > vh - 4) {
-                const topAbove = containerRect.top - popupHeight - 4;
-                top = topAbove >= 4 ? topAbove : Math.max(4, vh - popupHeight - 4);
+            if (vw < 768 || top + popupHeight > vh - 4) {
+                top = containerRect.top - popupHeight - 4;
             }
 
             this.popup.style.left = left + 'px';
