@@ -489,6 +489,11 @@ class Board {
         this.sp = Math.max(0.2 * this.scale, 3);
     }
 
+    createAligner(p) {
+        const pixelScale = getCanvasPixelScale(p);
+        return (val, strokeWidth = 1) => align(val, pixelScale, strokeWidth);
+    }
+
     boardToCanvas(x, y) {
         return [
             this.scale * x + this.offsetX,
@@ -932,8 +937,7 @@ class Board {
     }
 
     draw(p, deadChains = null, canonicalIndexMap = null, territory = null, viewerPlayer = null, reviewMode = false) {
-        const pixelScale = getCanvasPixelScale(p);
-        const alignPoint = (val, strokeWidth = 1) => align(val, pixelScale, strokeWidth);
+        const alignPoint = this.createAligner(p);
 
         p.push();
         p.translate(this.offsetX, this.offsetY);
@@ -1044,8 +1048,7 @@ class Board {
     drawPreviewDiff(p, previewBoard) {
         if (!previewBoard) return;
 
-        const pixelScale = getCanvasPixelScale(p);
-        const alignPoint = (val, strokeWidth = 1) => align(val, pixelScale, strokeWidth);
+        const alignPoint = this.createAligner(p);
 
         p.push();
         p.translate(this.offsetX, this.offsetY);
@@ -1081,8 +1084,7 @@ class Board {
     drawGhostStoneAt(p, node, color, turn = null) {
         if (!node) return;
 
-        const pixelScale = getCanvasPixelScale(p);
-        const alignPoint = (val, strokeWidth = 1) => align(val, pixelScale, strokeWidth);
+        const alignPoint = this.createAligner(p);
 
         p.push();
         p.translate(this.offsetX, this.offsetY);
@@ -1113,8 +1115,7 @@ class Board {
     drawIllegalMoveIndicator(p, node) {
         if (!node) return;
 
-        const pixelScale = getCanvasPixelScale(p);
-        const alignPoint = (val, strokeWidth = 1) => align(val, pixelScale, strokeWidth);
+        const alignPoint = this.createAligner(p);
 
         p.push();
         p.translate(this.offsetX, this.offsetY);
@@ -1134,8 +1135,7 @@ class Board {
     drawGhostStone(node, color, p, previewBoard = null, isIllegal = false) {
         if (!node) return;
 
-        const pixelScale = getCanvasPixelScale(p);
-        const alignPoint = (val, strokeWidth = 1) => align(val, pixelScale, strokeWidth);
+        const alignPoint = this.createAligner(p);
 
         p.push();
         p.translate(this.offsetX, this.offsetY);
