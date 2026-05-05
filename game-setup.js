@@ -518,7 +518,6 @@ function initBoardSketch() {
         
         p.setup = () => {
             const container = document.getElementById('preview-container');
-            p.pixelDensity(1);
             const availableWidth = container.clientWidth || container.offsetWidth || 400;
             const availableHeight = container.clientHeight || container.offsetHeight || 400;
             const size = Math.min(availableWidth, availableHeight);

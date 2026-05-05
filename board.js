@@ -51,7 +51,19 @@ const markerColors = [
 const boardColor = stoneColors[0]
 const gridColor = strokeColors[0]
 
-const align = (val) => Math.round(val + 0.5) - 0.5;
+function getCanvasPixelScale(p) {
+    const transform = p?.drawingContext?.getTransform?.();
+    if (!transform) return 1;
+    const scaleX = Math.abs(transform.a) || 1;
+    const scaleY = Math.abs(transform.d) || 1;
+    return Math.max(scaleX, scaleY, 1);
+}
+
+function align(val, pixelScale = 1, strokeWidth = 1) {
+    const deviceStrokeWidth = Math.max(1, Math.round(Math.abs(strokeWidth * pixelScale)));
+    const offset = deviceStrokeWidth % 2 === 0 ? 0 : 0.5 / pixelScale;
+    return Math.round(val * pixelScale) / pixelScale + offset;
+}
 
 class Node {
     constructor(x, y) {
@@ -920,6 +932,9 @@ class Board {
     }
 
     draw(p, deadChains = null, canonicalIndexMap = null, territory = null, viewerPlayer = null, reviewMode = false) {
+        const pixelScale = getCanvasPixelScale(p);
+        const alignPoint = (val, strokeWidth = 1) => align(val, pixelScale, strokeWidth);
+
         p.push();
         p.translate(this.offsetX, this.offsetY);
 
@@ -932,10 +947,10 @@ class Board {
                 if (b.color === -1) continue
                 if (a.i < b.i) {
                     p.line(
-                        align(this.scale * a.x),
-                        align(this.scale * a.y),
-                        align(this.scale * b.x),
-                        align(this.scale * b.y)
+                        alignPoint(this.scale * a.x, 1),
+                        alignPoint(this.scale * a.y, 1),
+                        alignPoint(this.scale * b.x, 1),
+                        alignPoint(this.scale * b.y, 1)
                     );
                 }
             }
@@ -947,7 +962,7 @@ class Board {
         p.fill(...gridColor);
         for (let node of this.nodes) {
             if (node.hoshi && node.color !== -1) {
-                p.circle(align(node.x * this.scale), align(node.y * this.scale), this.sp);
+                p.circle(alignPoint(node.x * this.scale), alignPoint(node.y * this.scale), this.sp);
             }
         }
 
@@ -969,7 +984,7 @@ class Board {
                     p.fill(...stoneColors[node.color]);
                     p.stroke(...strokeColors[node.color]);
                 }
-                p.circle(align(node.x * this.scale), align(node.y * this.scale), this.scale - this.sw);
+                p.circle(alignPoint(node.x * this.scale, this.sw), alignPoint(node.y * this.scale, this.sw), this.scale - this.sw);
             }
         }
 
@@ -997,8 +1012,8 @@ class Board {
                     p.noFill()
                     p.stroke(...markerColors[lastColor]);
                     p.circle(
-                        align(lastNode.x * this.scale),
-                        align(lastNode.y * this.scale),
+                        alignPoint(lastNode.x * this.scale),
+                        alignPoint(lastNode.y * this.scale),
                         markerSize
                     );
                 }
@@ -1017,7 +1032,7 @@ class Board {
                     // Draw marker on empty intersections or dead stones
                     if (node.color === 0 || isDead) {
                         p.fill(...stoneColors[owner]);
-                        p.circle(align(node.x * this.scale), align(node.y * this.scale), markerSize);
+                        p.circle(alignPoint(node.x * this.scale), alignPoint(node.y * this.scale), markerSize);
                     }
                 }
             }
@@ -1029,6 +1044,9 @@ class Board {
     drawPreviewDiff(p, previewBoard) {
         if (!previewBoard) return;
 
+        const pixelScale = getCanvasPixelScale(p);
+        const alignPoint = (val, strokeWidth = 1) => align(val, pixelScale, strokeWidth);
+
         p.push();
         p.translate(this.offsetX, this.offsetY);
 
@@ -1038,8 +1056,8 @@ class Board {
             const previewNode = previewBoard.nodes[i];
 
             if (originalNode.color !== previewNode.color) {
-                const cx = align(previewNode.x * this.scale);
-                const cy = align(previewNode.y * this.scale);
+                const cx = alignPoint(previewNode.x * this.scale, this.sw);
+                const cy = alignPoint(previewNode.y * this.scale, this.sw);
 
                 if (previewNode.color === 0 && originalNode.color > 0) {
                     // Capture: stone was removed - draw outline only (no fill)
@@ -1062,10 +1080,14 @@ class Board {
 
     drawGhostStoneAt(p, node, color, turn = null) {
         if (!node) return;
+
+        const pixelScale = getCanvasPixelScale(p);
+        const alignPoint = (val, strokeWidth = 1) => align(val, pixelScale, strokeWidth);
+
         p.push();
         p.translate(this.offsetX, this.offsetY);
-        const cx = align(node.x * this.scale);
-        const cy = align(node.y * this.scale);
+        const cx = alignPoint(node.x * this.scale, this.sw);
+        const cy = alignPoint(node.y * this.scale, this.sw);
         const d = this.scale - this.sw;
 
         if (color === 0 || color === -1) {
@@ -1091,14 +1113,17 @@ class Board {
     drawIllegalMoveIndicator(p, node) {
         if (!node) return;
 
+        const pixelScale = getCanvasPixelScale(p);
+        const alignPoint = (val, strokeWidth = 1) => align(val, pixelScale, strokeWidth);
+
         p.push();
         p.translate(this.offsetX, this.offsetY);
 
         // Draw a red X to indicate illegal move
         p.stroke(255, 0, 0, 200);
         p.strokeWeight(4);
-        const cx = align(node.x * this.scale);
-        const cy = align(node.y * this.scale);
+        const cx = alignPoint(node.x * this.scale, 4);
+        const cy = alignPoint(node.y * this.scale, 4);
         const r = (this.scale - this.sw) * 0.25;
         p.line(cx - r, cy - r, cx + r, cy + r);
         p.line(cx - r, cy + r, cx + r, cy - r);
@@ -1109,11 +1134,14 @@ class Board {
     drawGhostStone(node, color, p, previewBoard = null, isIllegal = false) {
         if (!node) return;
 
+        const pixelScale = getCanvasPixelScale(p);
+        const alignPoint = (val, strokeWidth = 1) => align(val, pixelScale, strokeWidth);
+
         p.push();
         p.translate(this.offsetX, this.offsetY);
 
-        const cx = align(node.x * this.scale);
-        const cy = align(node.y * this.scale);
+        const cx = alignPoint(node.x * this.scale, this.sw);
+        const cy = alignPoint(node.y * this.scale, this.sw);
         const d  = this.scale - this.sw;
         const xr = d * 0.25; // X arm radius
 
@@ -1146,14 +1174,14 @@ class Board {
                             // Removal (Capture)
                             p.fill(...boardColor, 180);
                             p.noStroke();
-                            p.circle(align(n.x * this.scale), align(n.y * this.scale), this.scale - this.sw);
+                            p.circle(alignPoint(n.x * this.scale, this.sw), alignPoint(n.y * this.scale, this.sw), this.scale - this.sw);
 
                             // Draw a small red marker to show it was captured
                             p.stroke(255, 0, 0, 120);
                             p.strokeWeight(2);
                             const r = (this.scale - this.sw) * 0.15;
-                            const cx = align(n.x * this.scale);
-                            const cy = align(n.y * this.scale);
+                            const cx = alignPoint(n.x * this.scale, 2);
+                            const cy = alignPoint(n.y * this.scale, 2);
                             p.line(cx - r, cy - r, cx + r, cy + r);
                             p.line(cx - r, cy + r, cx + r, cy - r);
                         } else {
@@ -1161,7 +1189,7 @@ class Board {
                             p.fill(...stoneColors[n.color], 150);
                             p.stroke(...strokeColors[n.color], 150);
                             p.strokeWeight(this.sw);
-                            p.circle(align(n.x * this.scale), align(n.y * this.scale), this.scale - this.sw);
+                            p.circle(alignPoint(n.x * this.scale, this.sw), alignPoint(n.y * this.scale, this.sw), this.scale - this.sw);
                         }
                     }
                 }
@@ -1175,7 +1203,7 @@ class Board {
             p.fill(...stoneColors[displayColor], 150);
             p.stroke(...strokeColors[displayColor], 150);
             p.strokeWeight(this.sw);
-            p.circle(align(node.x * this.scale), align(node.y * this.scale), this.scale - this.sw);
+            p.circle(alignPoint(node.x * this.scale, this.sw), alignPoint(node.y * this.scale, this.sw), this.scale - this.sw);
         }
 
         p.pop();

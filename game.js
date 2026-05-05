@@ -1882,7 +1882,6 @@ function createSketch() {
 
         p.setup = function() {
             const container = document.getElementById('board-container');
-            p.pixelDensity(1);
             
             // Get available size, accounting for the container's actual dimensions
             // Use clientWidth/clientHeight which don't include scrollbars
