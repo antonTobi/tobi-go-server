@@ -48,6 +48,7 @@ const isLobby    = () => phase === 'lobby';
 let liveMoves = [];      // All moves from database, stored separately
 let viewIndex = 0;       // Current move index being viewed (0 = initial board, liveMoves.length = latest)
 let isViewingHistory = false; // True if user is viewing past moves (not auto-advancing)
+let reviewDisplayClocks = null; // { playerNum: paused ms } snapshot for the currently rebuilt review position
 
 // Local review / variation mode (active only when game is finished)
 // reviewBranchPoint: null = on main branch; integer = main-branch index where we left it
@@ -72,8 +73,23 @@ window._debugHistory = () => ({ liveMoves, viewIndex, isViewingHistory, totalMov
 
 // Initialize game when DOM is ready
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initGame);
+    document.addEventListener('DOMContentLoaded', initGamePage);
 } else {
+    initGamePage();
+}
+
+let gameInitStarted = false;
+
+async function initGamePage() {
+    if (gameInitStarted) return;
+    gameInitStarted = true;
+
+    try {
+        await waitForAuthReady();
+    } catch (error) {
+        console.error('Auth initialization failed before loading game:', error);
+    }
+
     initGame();
 }
 
@@ -357,16 +373,33 @@ function rebuildBoardToView() {
         board = Board.fromSettings(gameSettings);
         if (p5Instance) board.calculateTransform(p5Instance.width, p5Instance.height);
 
+        reviewDisplayClocks = null;
+        if (gameSettings.timeSettings) {
+            reviewDisplayClocks = {};
+            for (const [playerNum, ts] of Object.entries(gameSettings.timeSettings)) {
+                reviewDisplayClocks[playerNum] = ts?.maintime ?? null;
+            }
+        }
+
+        const replayMove = (move) => {
+            if (!move) return;
+            const playerNum = board.currentTurn?.player;
+            if (reviewDisplayClocks && move[M_TIME_LEFT] !== undefined && playerNum > 0) {
+                reviewDisplayClocks[playerNum] = move[M_TIME_LEFT];
+            }
+            board.applyMoveRecord(move);
+        };
+
         // Replay main-branch moves up to viewIndex
         const mainEnd = inVariation() ? reviewBranchPoint : viewIndex;
         for (let i = 0; i < mainEnd && i < liveMoves.length; i++) {
-            if (liveMoves[i]) board.applyMoveRecord(liveMoves[i]);
+            replayMove(liveMoves[i]);
         }
 
         // If in a variation branch, also replay variation moves up to reviewVariationIndex
         if (inVariation()) {
             for (let j = 0; j < reviewVariationIndex && j < reviewBranchMoves.length; j++) {
-                board.applyMoveRecord(reviewBranchMoves[j]);
+                replayMove(reviewBranchMoves[j]);
             }
         }
 
@@ -1162,6 +1195,20 @@ function calculateScores() {
     return scores;
 }
 
+function getOccupiedPlayerName(playerNum, odIndex) {
+    if (!odIndex) return '';
+    return playerDisplayNames[odIndex] || '';
+}
+
+function formatEliminationReason(reason) {
+    const messages = {
+        timeout: 'Lost by time',
+        resign: 'Resigned',
+        'capture-go': 'Captured',
+    };
+    return messages[reason] || 'Eliminated';
+}
+
 // Cache for player display names
 const playerDisplayNames = {};
 
@@ -1204,15 +1251,16 @@ function createPlayerCard(playerNum, containerId) {
     const info = document.createElement('div');
     info.className = 'player-info';
 
-    const label = document.createElement('div');
-    label.className = 'player-label';
-    label.textContent = `Player ${playerNum}`;
-    info.appendChild(label);
-
     const nameDisplay = document.createElement('div');
     nameDisplay.className = 'player-uid';
     nameDisplay.id = `${containerId}-name-${playerNum}`;
     info.appendChild(nameDisplay);
+
+    const statusDisplay = document.createElement('div');
+    statusDisplay.className = 'player-eliminated-label';
+    statusDisplay.id = `${containerId}-status-${playerNum}`;
+    statusDisplay.style.display = 'none';
+    info.appendChild(statusDisplay);
 
     const scoreDisplay = document.createElement('div');
     scoreDisplay.className = 'player-score';
@@ -1313,6 +1361,7 @@ function updatePlayerCard(playerNum, prefix, scores) {
     const isMe = currentUser && odIndex === currentUser.uid;
     const isCurrentTurn = board && board.currentTurn && board.currentTurn.player === playerNum;
     const isEliminated = board?.eliminatedPlayers.has(playerNum);
+    const eliminationReason = isEliminated ? formatEliminationReason(board?.eliminationReasons?.[playerNum]) : '';
 
     // Sole survivor = winner (only one required seat not eliminated)
     const alivePlayers = requiredSeats.filter(p => !board?.eliminatedPlayers.has(p));
@@ -1341,23 +1390,23 @@ function updatePlayerCard(playerNum, prefix, scores) {
 
     const nameDisplay = document.getElementById(`${prefix}-name-${playerNum}`);
     if (nameDisplay) {
-        if (isEliminated) {
-            nameDisplay.className = 'player-eliminated-label';
-            nameDisplay.textContent = 'Eliminated';
-        } else if (isSoleWinner) {
-            nameDisplay.className = 'player-uid';
-            nameDisplay.textContent = isMe ? 'You' : (playerDisplayNames[odIndex] || (isOccupied ? odIndex.substring(0, 12) + '...' : ''));
-        } else if (isOccupied) {
-            nameDisplay.className = 'player-uid';
-            if (isMe) {
-                nameDisplay.textContent = 'You';
-            } else {
-                const displayName = playerDisplayNames[odIndex];
-                nameDisplay.textContent = displayName || odIndex.substring(0, 12) + '...';
-            }
+        if (isOccupied) {
+            nameDisplay.className = 'player-name';
+            nameDisplay.textContent = getOccupiedPlayerName(playerNum, odIndex);
         } else {
             nameDisplay.className = 'player-empty';
             nameDisplay.textContent = 'Click to join';
+        }
+    }
+
+    const statusDisplay = document.getElementById(`${prefix}-status-${playerNum}`);
+    if (statusDisplay) {
+        if (isEliminated && isOccupied) {
+            statusDisplay.textContent = eliminationReason;
+            statusDisplay.style.display = '';
+        } else {
+            statusDisplay.textContent = '';
+            statusDisplay.style.display = 'none';
         }
     }
 
@@ -1816,6 +1865,7 @@ function createSketch() {
 
             if (size > 0 && (p.width !== size || p.height !== size)) {
                 p.resizeCanvas(size, size);
+                syncBoardCanvasDisplaySize(p.canvas, size, size);
             }
             if (size > 0 && board) {
                 board.calculateTransform(p.width, p.height);
@@ -1823,9 +1873,16 @@ function createSketch() {
             }
         }
 
+        function syncBoardCanvasDisplaySize(canvas, width, height) {
+            if (!canvas) return;
+            canvas.style.width = `${width}px`;
+            canvas.style.height = `${height}px`;
+            canvas.style.flexShrink = '0';
+        }
+
         p.setup = function() {
-            // Use default pixel density for crisp rendering on high-DPI screens
             const container = document.getElementById('board-container');
+            p.pixelDensity(1);
             
             // Get available size, accounting for the container's actual dimensions
             // Use clientWidth/clientHeight which don't include scrollbars
@@ -1841,6 +1898,7 @@ function createSketch() {
             const size = Math.min(availWidth, availHeight);
             let canvas = p.createCanvas(size, size);
             canvas.parent(container);
+            syncBoardCanvasDisplaySize(canvas.elt, size, size);
             p.noLoop();
             
             // Initialize board
@@ -2028,27 +2086,8 @@ function createSketch() {
 // Clock helper functions
 
 function getDisplayTime(playerNum) {
-    // In review mode on the main branch: derive clock from move timestamps like undo does.
-    if (isReviewing() && !inVariation() && gameSettings?.timeSettings?.[playerNum]) {
-        const scratch = Board.fromSettings(gameSettings);
-        let lastTimeLeft = null;
-        for (let i = 0; i < viewIndex && i < liveMoves.length; i++) {
-            const m = liveMoves[i];
-            if (!m) { scratch.applyMoveRecord({}); continue; }
-            const player = scratch.currentTurn?.player;
-            scratch.applyMoveRecord(m);
-            if (m[M_TIME_LEFT] !== undefined && player === playerNum) {
-                lastTimeLeft = m[M_TIME_LEFT];
-            }
-        }
-        return lastTimeLeft; // null if no recorded time yet
-    }
-    // In review mode off the main branch: freeze – return last-known main-branch value
-    if (isReviewing() && inVariation()) {
-        if (!(playerNum in clocks)) return null;
-        const val = clocks[playerNum];
-        // clocks holds the final game value; just display it as paused ms
-        return val >= 1e12 ? Math.max(0, val - serverNow()) : val;
+    if (isReviewing() && gameSettings?.timeSettings?.[playerNum]) {
+        return reviewDisplayClocks?.[playerNum] ?? gameSettings.timeSettings[playerNum]?.maintime ?? null;
     }
     // Normal mode
     if (!(playerNum in clocks)) return null;

@@ -18,6 +18,7 @@ let db = null;
 let auth = null;
 let currentUser = null;
 let authReady = false;
+let authReadyPromise = null;
 
 // Display name cache to avoid repeated database reads
 const displayNameCache = {};
@@ -36,17 +37,6 @@ try {
             if (result && result.user) {
                 console.log('Google redirect successful, user:', result.user.uid, 'operationType:', result.operationType);
                 console.log('User isAnonymous:', result.user.isAnonymous);
-                
-                // Use Google display name if user doesn't have one set
-                if (result.user.displayName) {
-                    db.ref(`users/${result.user.uid}/displayName`).once('value').then(snapshot => {
-                        if (!snapshot.val()) {
-                            db.ref(`users/${result.user.uid}/displayName`).set(result.user.displayName);
-                            displayNameCache[result.user.uid] = result.user.displayName;
-                            console.log('Set display name from Google:', result.user.displayName);
-                        }
-                    });
-                }
             }
         })
         .catch((error) => {
@@ -83,22 +73,53 @@ try {
         });
     
     // Listen for auth state changes
-    auth.onAuthStateChanged((user) => {
+    auth.onAuthStateChanged(async (user) => {
         if (user) {
             currentUser = user;
             authReady = true;
             console.log('User authenticated:', user.uid);
+
+            try {
+                await ensureUserDisplayName(user);
+            } catch (error) {
+                console.error('Failed to ensure display name:', error);
+            }
             
             // Dispatch custom event for pages to listen to
             window.dispatchEvent(new CustomEvent('authReady', { detail: { user } }));
         } else {
             currentUser = null;
             authReady = false;
+            authReadyPromise = null;
             console.log('User signed out');
         }
     });
 } catch (error) {
     console.warn('Firebase initialization failed:', error);
+}
+
+function waitForAuthReady() {
+    if (currentUser) {
+        return Promise.resolve(currentUser);
+    }
+
+    if (!authReadyPromise) {
+        authReadyPromise = new Promise((resolve) => {
+            const onReady = (event) => {
+                window.removeEventListener('authReady', onReady);
+                resolve(event.detail.user);
+            };
+
+            window.addEventListener('authReady', onReady);
+
+            if (currentUser) {
+                window.removeEventListener('authReady', onReady);
+                resolve(currentUser);
+            }
+        });
+    }
+
+    return authReadyPromise;
 }
 
 // ============================================
@@ -154,6 +175,30 @@ async function getMyDisplayName() {
     return getDisplayName(currentUser.uid);
 }
 
+function generatePlaceholderDisplayName() {
+    const consonants = 'mnptkswlj';
+    const vowels = 'aeiou';
+    const pick = (chars) => chars.charAt(Math.floor(Math.random() * chars.length));
+
+    return `${pick(consonants).toUpperCase()}${pick(vowels)}${pick(consonants)}${pick(vowels)}`;
+}
+
+async function ensureUserDisplayName(user, preferredName = user?.displayName) {
+    if (!user) return null;
+
+    const existingName = await getDisplayName(user.uid);
+    if (existingName) return existingName;
+
+    const trimmedPreferredName = preferredName?.trim();
+    const displayName = trimmedPreferredName
+        ? trimmedPreferredName.slice(0, 20)
+        : generatePlaceholderDisplayName();
+
+    await db.ref(`users/${user.uid}/displayName`).set(displayName);
+    displayNameCache[user.uid] = displayName;
+    return displayName;
+}
+
 // ============================================
 // Authentication Functions
 // ============================================
@@ -192,17 +237,6 @@ async function signInWithGoogle() {
             console.log('signInWithGoogle: Popup successful');
             
             currentUser = result.user;
-            
-            // Use Google display name if user doesn't have one set
-            if (result.user && result.user.displayName) {
-                const existingName = await getDisplayName(result.user.uid);
-                if (!existingName) {
-                    await setDisplayName(result.user.displayName);
-                }
-            }
-            
-            // Dispatch auth ready event to update UI
-            window.dispatchEvent(new CustomEvent('authReady', { detail: { user: result.user } }));
             
             return result.user;
         } catch (popupError) {
@@ -258,17 +292,6 @@ async function linkWithGoogle() {
             // Update currentUser reference
             currentUser = auth.currentUser;
             
-            // Use Google display name if user doesn't have one set
-            if (result.user && result.user.displayName) {
-                const existingName = await getDisplayName(result.user.uid);
-                if (!existingName) {
-                    await setDisplayName(result.user.displayName);
-                }
-            }
-            
-            // Dispatch auth ready event to update UI
-            window.dispatchEvent(new CustomEvent('authReady', { detail: { user: auth.currentUser } }));
-            
             return auth.currentUser;
         } catch (popupError) {
             // If popup is blocked or fails, fall back to redirect
@@ -287,7 +310,6 @@ async function linkWithGoogle() {
                 if (credential) {
                     const result = await auth.signInWithCredential(credential);
                     currentUser = result.user;
-                    window.dispatchEvent(new CustomEvent('authReady', { detail: { user: result.user } }));
                     return result.user;
                 }
             }

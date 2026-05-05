@@ -287,6 +287,7 @@ class Board {
         this.visitedStates = new Set() // Serialized board states for superko checking
         this.moveHistory = []          // [{i}] entries for last-move marker display
         this.eliminatedPlayers = new Set() // Player numbers that have been eliminated
+        this.eliminationReasons = {}    // { [playerNum]: reason } recorded from elimination moves
         this.capturedByColor = {}      // { [colorNum]: count } cumulative stones lost by color
         this.consecutiveMainPasses = 0 // Count of consecutive passes taken on main-sequence turns
 
@@ -366,6 +367,7 @@ class Board {
         newBoard.visitedStates = new Set(this.visitedStates);
         newBoard.moveHistory = this.moveHistory.map(m => ({ ...m }));
         newBoard.eliminatedPlayers = new Set(this.eliminatedPlayers);
+        newBoard.eliminationReasons = { ...this.eliminationReasons };
         newBoard.consecutiveMainPasses = this.consecutiveMainPasses;
 
         newBoard.boundingBox = { ...this.boundingBox };
@@ -463,10 +465,14 @@ class Board {
             canvasWidth / marginWidth,
             canvasHeight / marginHeight
         );
-        this.offsetX = -this.boundingBox.minX * this.scale +
+        const offsetX = -this.boundingBox.minX * this.scale +
             (canvasWidth - this.scale * this.width) / 2;
-        this.offsetY = -this.boundingBox.minY * this.scale +
+        const offsetY = -this.boundingBox.minY * this.scale +
             (canvasHeight - this.scale * this.height) / 2;
+
+        // Keep the translation on whole pixels so aligned 1px lines stay crisp.
+        this.offsetX = Math.round(offsetX);
+        this.offsetY = Math.round(offsetY);
         this.sw = 0.05 * this.scale;
         this.sp = Math.max(0.2 * this.scale, 3);
     }
@@ -534,6 +540,7 @@ class Board {
 
         if (move[M_ELIMINATED] !== undefined) {
             this.eliminatedPlayers.add(move[M_ELIMINATED]);
+            this.eliminationReasons[move[M_ELIMINATED]] = move[M_ELIM_REASON] || null;
             // If it's currently that player's turn, advance past them.
             if (this.currentTurn && this.currentTurn.player === move[M_ELIMINATED]) {
                 this.advanceMoveOrder();

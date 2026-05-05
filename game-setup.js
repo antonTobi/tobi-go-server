@@ -9,6 +9,7 @@ let hoverNode = null;
 let hoverPickerColor = null;
 let boardP5 = null;
 let pickerP5 = null;
+let previewResizeObserver = null;
 
 // Drag state for placing multiple stones
 let isDragging = false;
@@ -31,8 +32,23 @@ const boardTypeConfig = {
 };
 
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initSetupPage);
+    document.addEventListener('DOMContentLoaded', initSetupPageWhenReady);
 } else {
+    initSetupPageWhenReady();
+}
+
+let setupPageInitialized = false;
+
+async function initSetupPageWhenReady() {
+    if (setupPageInitialized) return;
+    setupPageInitialized = true;
+
+    try {
+        await waitForAuthReady();
+    } catch (error) {
+        console.error('Auth initialization failed before loading setup page:', error);
+    }
+
     initSetupPage();
 }
 
@@ -228,9 +244,23 @@ function addVariant(type) {
 
     buildVariantBody(entry, bodyId);
 
-    // Scroll the content area to the bottom so the new entry is visible
-    const content = document.querySelector('.setup-content');
-    if (content) content.scrollTop = content.scrollHeight;
+    scrollVariantListToBottom();
+}
+
+function scrollVariantListToBottom() {
+    requestAnimationFrame(() => {
+        const scrollers = [
+            document.getElementById('variants-list'),
+            document.querySelector('.variants-panel'),
+            document.querySelector('.setup-content'),
+            document.querySelector('.setup-page'),
+            document.scrollingElement,
+        ].filter(Boolean);
+
+        for (const scroller of scrollers) {
+            scroller.scrollTop = scroller.scrollHeight;
+        }
+    });
 }
 
 function buildVariantBody(entry, containerId) {
@@ -451,10 +481,11 @@ function handleResize() {
     if (!container || !boardP5) return;
 
     // Get the container's available space
-    const rect = container.getBoundingClientRect();
+    const availableWidth = container.clientWidth || container.offsetWidth;
+    const availableHeight = container.clientHeight || container.offsetHeight;
     
     // If container has no size yet, try again later
-    if (rect.width < 50 || rect.height < 50) {
+    if (availableWidth < 50 || availableHeight < 50) {
         requestAnimationFrame(handleResize);
         return;
     }
@@ -462,15 +493,23 @@ function handleResize() {
     // Board should be square - use the smaller dimension
     // but limit to a reasonable maximum
     const maxSize = 600;
-    const size = Math.floor(Math.min(rect.width, rect.height, maxSize));
+    const size = Math.min(availableWidth, availableHeight, maxSize);
     
     if (size > 50) {
         boardP5.resizeCanvas(size, size);
+        syncBoardCanvasDisplaySize(boardP5.canvas, size, size);
         if (previewBoard) {
             previewBoard.calculateTransform(size, size);
             boardP5.redraw();
         }
     }
+}
+
+function syncBoardCanvasDisplaySize(canvas, width, height) {
+    if (!canvas) return;
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    canvas.style.flexShrink = '0';
 }
 
 function initBoardSketch() {
@@ -479,9 +518,13 @@ function initBoardSketch() {
         
         p.setup = () => {
             const container = document.getElementById('preview-container');
-            const size = Math.min(container.offsetWidth || 400, container.offsetHeight || 400);
+            p.pixelDensity(1);
+            const availableWidth = container.clientWidth || container.offsetWidth || 400;
+            const availableHeight = container.clientHeight || container.offsetHeight || 400;
+            const size = Math.min(availableWidth, availableHeight);
             canvas = p.createCanvas(size, size);
             canvas.parent('preview-container');
+            syncBoardCanvasDisplaySize(canvas.elt, size, size);
             p.noLoop();
             
             // Attach mouse/touch events directly to the canvas element
@@ -615,6 +658,12 @@ function initBoardSketch() {
     };
     
     boardP5 = new p5(sketch);
+
+    const container = document.getElementById('preview-container');
+    if (typeof ResizeObserver !== 'undefined' && container) {
+        previewResizeObserver = new ResizeObserver(() => handleResize());
+        previewResizeObserver.observe(container);
+    }
 }
 
 function applyDragToNode(node) {
