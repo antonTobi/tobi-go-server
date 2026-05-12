@@ -19,6 +19,9 @@ let auth = null;
 let currentUser = null;
 let authReady = false;
 let authReadyPromise = null;
+let initialAuthStatePromise = null;
+let resolveInitialAuthState = null;
+let authBootstrapComplete = false;
 
 // Display name cache to avoid repeated database reads
 const displayNameCache = {};
@@ -27,57 +30,69 @@ try {
     firebase.initializeApp(firebaseConfig);
     db = firebase.database();
     auth = firebase.auth();
+    initialAuthStatePromise = new Promise((resolve) => {
+        resolveInitialAuthState = resolve;
+    });
     
-    // Check for redirect result FIRST, before any other auth operations
-    auth.getRedirectResult()
-        .then((result) => {
-            console.log('getRedirectResult:', result);
-            
-            // Check if we got a result from redirect (either sign-in or link)
-            if (result && result.user) {
-                console.log('Google redirect successful, user:', result.user.uid, 'operationType:', result.operationType);
-                console.log('User isAnonymous:', result.user.isAnonymous);
-            }
-        })
-        .catch((error) => {
-            console.error('getRedirectResult error:', error);
-            // Handle the case where the Google account is already linked to another user
-            if (error.code === 'auth/credential-already-in-use') {
-                console.log('Credential already in use, signing in with existing account');
-                if (error.credential) {
-                    return auth.signInWithCredential(error.credential);
-                }
-            }
-            // Dispatch error event for UI to handle
-            window.dispatchEvent(new CustomEvent('authError', { detail: { error } }));
-        });
+    const dispatchAuthReady = (user) => {
+        window.dispatchEvent(new CustomEvent('authReady', { detail: { user } }));
+    };
     
-    // Set persistence to LOCAL (survives browser restarts)
-    auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
-        .then(() => {
-            console.log('Firebase initialized with persistent auth');
-            
-            // Only sign in anonymously if not already signed in
-            if (!auth.currentUser) {
-                console.log('No current user, signing in anonymously');
-                return auth.signInAnonymously();
-            } else {
-                console.log('Already signed in as:', auth.currentUser.uid, 'isAnonymous:', auth.currentUser.isAnonymous);
-            }
-        })
-        .then(() => {
-            console.log('Auth ready');
-        })
-        .catch((error) => {
-            console.error('Auth initialization failed:', error);
-        });
+    const finishAuthBootstrap = () => {
+        authBootstrapComplete = true;
+        if (currentUser) {
+            dispatchAuthReady(currentUser);
+        }
+    };
+    
+    const handleAuthBootstrapError = (error) => {
+        console.error('Auth initialization failed:', error);
+        authBootstrapComplete = true;
+        if (!currentUser) {
+            authReady = false;
+            authReadyPromise = null;
+        }
+    };
+
+    const logCurrentAuthToken = async (user, reason) => {
+        if (!user) {
+            console.log(`Auth token unavailable (${reason}): no user`);
+            return;
+        }
+        try {
+            const tokenResult = await user.getIdTokenResult();
+            console.log('Auth token state:', {
+                reason,
+                uid: user.uid,
+                issuedAtTime: tokenResult.issuedAtTime,
+                expirationTime: tokenResult.expirationTime,
+                authTime: tokenResult.authTime,
+                signInProvider: tokenResult.signInProvider,
+                claims: tokenResult.claims,
+            });
+        } catch (error) {
+            console.error(`Failed to inspect auth token (${reason}):`, error);
+        }
+    };
+
+    db.ref('.info/connected').on('value', (snapshot) => {
+        console.log('RTDB connectivity changed:', snapshot.val());
+    }, (error) => {
+        console.error('RTDB connectivity listener failed:', error);
+    });
     
     // Listen for auth state changes
     auth.onAuthStateChanged(async (user) => {
+        if (resolveInitialAuthState) {
+            resolveInitialAuthState(user);
+            resolveInitialAuthState = null;
+        }
+
         if (user) {
             currentUser = user;
             authReady = true;
             console.log('User authenticated:', user.uid);
+            logCurrentAuthToken(user, 'onAuthStateChanged');
 
             try {
                 await ensureUserDisplayName(user);
@@ -85,8 +100,9 @@ try {
                 console.error('Failed to ensure display name:', error);
             }
             
-            // Dispatch custom event for pages to listen to
-            window.dispatchEvent(new CustomEvent('authReady', { detail: { user } }));
+            if (authBootstrapComplete) {
+                dispatchAuthReady(user);
+            }
         } else {
             currentUser = null;
             authReady = false;
@@ -94,6 +110,56 @@ try {
             console.log('User signed out');
         }
     });
+
+    auth.onIdTokenChanged((user) => {
+        console.log('Auth ID token changed:', user ? { uid: user.uid, isAnonymous: user.isAnonymous } : null);
+        if (user) logCurrentAuthToken(user, 'onIdTokenChanged');
+    });
+    
+    auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
+        .then(async () => {
+            console.log('Firebase initialized with persistent auth');
+
+            await initialAuthStatePromise;
+
+            const result = await auth.getRedirectResult();
+            console.log('getRedirectResult:', result);
+            
+            // Check if we got a result from redirect (either sign-in or link)
+            if (result && result.user) {
+                console.log('Google redirect successful, user:', result.user.uid, 'operationType:', result.operationType);
+                console.log('User isAnonymous:', result.user.isAnonymous);
+            }
+            
+            // Only fall back to anonymous auth after restored/redirect auth has settled.
+            if (!auth.currentUser) {
+                console.log('No current user after auth restoration, signing in anonymously');
+                await auth.signInAnonymously();
+            } else {
+                console.log('Auth session restored as:', auth.currentUser.uid, 'isAnonymous:', auth.currentUser.isAnonymous);
+            }
+
+            console.log('Auth ready');
+            finishAuthBootstrap();
+        })
+        .catch((error) => {
+            // Handle the case where the Google account is already linked to another user
+            if (error.code === 'auth/credential-already-in-use') {
+                console.log('Credential already in use, signing in with existing account');
+                if (error.credential) {
+                    return auth.signInWithCredential(error.credential)
+                        .then(() => {
+                            console.log('Auth ready');
+                            finishAuthBootstrap();
+                        })
+                        .catch(handleAuthBootstrapError);
+                }
+            }
+            // Dispatch error event for UI to handle
+            window.dispatchEvent(new CustomEvent('authError', { detail: { error } }));
+            handleAuthBootstrapError(error);
+        })
+        .catch(handleAuthBootstrapError);
 } catch (error) {
     console.warn('Firebase initialization failed:', error);
 }
@@ -136,8 +202,10 @@ async function getDisplayName(uid) {
     }
     
     try {
+        console.log('Fetching display name for uid:', uid);
         const snapshot = await db.ref(`users/${uid}/displayName`).once('value');
         const name = snapshot.val();
+        console.log('Fetched display name result:', { uid, exists: snapshot.exists(), name });
         if (name) {
             displayNameCache[uid] = name;
         }
@@ -194,6 +262,7 @@ async function ensureUserDisplayName(user, preferredName = user?.displayName) {
         ? trimmedPreferredName.slice(0, 20)
         : generatePlaceholderDisplayName();
 
+    console.log('Creating fallback display name:', { uid: user.uid, displayName, preferredName: trimmedPreferredName || null });
     await db.ref(`users/${user.uid}/displayName`).set(displayName);
     displayNameCache[user.uid] = displayName;
     return displayName;

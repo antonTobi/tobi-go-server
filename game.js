@@ -26,6 +26,7 @@ let request = null;             // Current request object or null
 let deadChains = {};            // { canonicalIndex: true }
 let canonicalIndexMap = null;   // { nodeIndex: canonicalIndex } — computed when entering scoring
 let territory = null;           // { nodeIndex: ownerColor } — computed when deadChains changes
+let finishReason = null;        // 'scoring' | 'elimination' | null
 let gameLoaded = false;
 let acceptCooldown = false;     // Prevents accepting immediately after a chain toggle
 let seats = {};                 // { playerNumber: uid }
@@ -38,6 +39,17 @@ let debugMode = false;          // Debug mode: host can play all seats
 let clockInterval = null;       // setInterval handle for clock display updates
 let serverTimeOffset = 0;       // Firebase server time offset (ms): serverTime = Date.now() + serverTimeOffset
 function serverNow() { return Date.now() + serverTimeOffset; }
+
+const BASE_GAME_TITLE = 'TGS - Game';
+let titleNeedsAttention = false;
+let titleStateInitialized = false;
+let previousTitleState = {
+    lobbyReadyForHost: false,
+    playing: false,
+    myTurn: false,
+    scoring: false,
+    finished: false,
+};
 
 const isPlaying  = () => phase === 'playing';
 const isScoring  = () => phase === 'scoring';
@@ -64,12 +76,69 @@ const inVariation  = () => reviewBranchPoint !== null;
 // True when this client can drive the shared review (participant + online mode)
 const canControlOnlineReview = () => isOnlineReview && mySeat !== null;
 const isViewingFinalMainPosition = () => !inVariation() && viewIndex >= liveMoves.length;
-const isShowingFinishedTerritory = () => isFinished() && isViewingFinalMainPosition();
+
+function countAlivePlayers() {
+    if (!board) return 0;
+    return requiredSeats.filter(p => !board.eliminatedPlayers.has(p)).length;
+}
+
+function isFinishedByScoring() {
+    if (!isFinished()) return false;
+    if (finishReason === 'scoring') return true;
+    if (finishReason === 'elimination') return false;
+    return countAlivePlayers() > 1;
+}
+
+const isShowingFinishedTerritory = () => isFinishedByScoring() && isViewingFinalMainPosition();
+
+function applyGameDocumentTitle() {
+    document.title = `${titleNeedsAttention ? '(!) ' : ''}${BASE_GAME_TITLE}`;
+}
+
+function requestGameTitleAttention() {
+    if (document.hasFocus() && !document.hidden) return;
+    titleNeedsAttention = true;
+    applyGameDocumentTitle();
+}
+
+function clearGameTitleAttention() {
+    if (!titleNeedsAttention) return;
+    titleNeedsAttention = false;
+    applyGameDocumentTitle();
+}
+
+function evaluateGameTitleNotifications() {
+    const nextState = {
+        lobbyReadyForHost: gameLoaded && isHost() && isLobby() && allSeatsFilled(),
+        playing: isPlaying(),
+        myTurn: !!(board && canMakeMove()),
+        scoring: isScoring(),
+        finished: isFinished(),
+    };
+
+    if (titleStateInitialized) {
+        if (!previousTitleState.lobbyReadyForHost && nextState.lobbyReadyForHost) requestGameTitleAttention();
+        if (!previousTitleState.playing && nextState.playing) requestGameTitleAttention();
+        if (!previousTitleState.myTurn && nextState.myTurn) requestGameTitleAttention();
+        if (!previousTitleState.scoring && nextState.scoring) requestGameTitleAttention();
+        if (!previousTitleState.finished && nextState.finished) requestGameTitleAttention();
+    }
+
+    previousTitleState = nextState;
+    titleStateInitialized = true;
+    applyGameDocumentTitle();
+}
 
 // Debug
 window._debugBoard = () => board;
 window._debugSeats = () => ({ seats, mySeat, requiredSeats });
 window._debugHistory = () => ({ liveMoves, viewIndex, isViewingHistory, totalMoves: liveMoves.length });
+
+window.addEventListener('focus', clearGameTitleAttention);
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && document.hasFocus()) clearGameTitleAttention();
+});
+applyGameDocumentTitle();
 
 // Initialize game when DOM is ready
 if (document.readyState === 'loading') {
@@ -165,14 +234,20 @@ function initGame() {
     gameRef = db.ref(`games/${gameId}`);
     seatsRef = db.ref(`games/${gameId}/seats`);
     movesRef = db.ref(`games/${gameId}/${G_MOVES}`);
+    console.log('Initializing game page refs:', { gameId });
 
     // Keep server time offset in sync so all clients share the same clock reference
     db.ref('.info/serverTimeOffset').on('value', snap => {
         serverTimeOffset = snap.val() || 0;
+        console.log('Server time offset updated:', serverTimeOffset);
+    }, (error) => {
+        console.error('Server time offset listener failed:', error);
     });
 
+    console.log('Loading initial game snapshot');
     gameRef.once('value')
         .then((snapshot) => {
+            console.log('Initial game snapshot received:', { exists: snapshot.exists(), gameId });
             const gameData = snapshot.val();
             if (!gameData) {
                 alert('Game not found');
@@ -186,6 +261,7 @@ function initGame() {
             clocks        = gameData[G_CLOCKS]      || {};
             request       = gameData[G_REQUEST]     || null;
             deadChains    = gameData[G_DEAD_CHAINS] || {};
+            finishReason  = gameData[G_FINISH_REASON] || null;
             gameLoaded = true;
 
             requiredSeats = getRequiredSeats(gameSettings);
@@ -202,15 +278,17 @@ function initGame() {
             renderHistoryControls();
             renderTurnOrder();
             startClockInterval();
+            evaluateGameTitleNotifications();
 
-            seatsRef.on('value', handleSeatsChanged);
-            gameRef.child(G_PHASE).on('value', handlePhaseChanged);
-            gameRef.child(G_DEAD_CHAINS).on('value', handleDeadChainsChanged);
-            gameRef.child(G_CLOCKS).on('value', handleClocksChanged);
-            gameRef.child(G_REQUEST).on('value', handleRequestChanged);
-            movesRef.on('child_added', handleMoveAdded);
-            movesRef.on('child_removed', handleMoveRemoved);
-            gameRef.child(G_REVIEW).on('value', handleReviewChanged);
+            seatsRef.on('value', handleSeatsChanged, (error) => console.error('Seats listener failed:', error));
+            gameRef.child(G_PHASE).on('value', handlePhaseChanged, (error) => console.error('Phase listener failed:', error));
+            gameRef.child(G_DEAD_CHAINS).on('value', handleDeadChainsChanged, (error) => console.error('Dead chains listener failed:', error));
+            gameRef.child(G_CLOCKS).on('value', handleClocksChanged, (error) => console.error('Clocks listener failed:', error));
+            gameRef.child(G_REQUEST).on('value', handleRequestChanged, (error) => console.error('Request listener failed:', error));
+            gameRef.child(G_FINISH_REASON).on('value', handleFinishReasonChanged, (error) => console.error('Finish reason listener failed:', error));
+            movesRef.on('child_added', handleMoveAdded, (error) => console.error('Move-added listener failed:', error));
+            movesRef.on('child_removed', handleMoveRemoved, (error) => console.error('Move-removed listener failed:', error));
+            gameRef.child(G_REVIEW).on('value', handleReviewChanged, (error) => console.error('Review listener failed:', error));
         })
         .catch((error) => {
             console.error('Error loading game:', error);
@@ -263,13 +341,14 @@ function handleSeatsChanged(snapshot) {
     renderPlayerCards();
     renderGameControls();
     if (p5Instance) p5Instance.redraw();
+    evaluateGameTitleNotifications();
 }
 
 function handleMoveAdded(snapshot) {
     const move = snapshot.val();
     const moveIndex = parseInt(snapshot.key);
 
-    if (move) {
+    if (move !== null) {
         liveMoves[moveIndex] = move;
 
         if (!isViewingHistory) {
@@ -282,6 +361,7 @@ function handleMoveAdded(snapshot) {
         renderGameControls();
         renderHistoryControls();
         if (p5Instance) p5Instance.redraw();
+        evaluateGameTitleNotifications();
 
         checkCaptureGoElimination();
     }
@@ -304,6 +384,7 @@ function handleMoveRemoved(snapshot) {
         renderGameControls();
         renderHistoryControls();
         if (p5Instance) p5Instance.redraw();
+        evaluateGameTitleNotifications();
     }
 }
 
@@ -322,6 +403,7 @@ function handlePhaseChanged(snapshot) {
     renderTurnOrder();
     if (isPlaying() && isHost()) processRandomMoves();
     if (p5Instance) p5Instance.redraw();
+    evaluateGameTitleNotifications();
 }
 
 function handleDeadChainsChanged(snapshot) {
@@ -358,6 +440,22 @@ function handleRequestChanged(snapshot) {
     renderGameControls();
 }
 
+function handleFinishReasonChanged(snapshot) {
+    finishReason = snapshot.val() || null;
+    if (board) {
+        const viewingFinalMain = isViewingFinalMainPosition();
+        if ((isScoring() || isFinishedByScoring()) && viewingFinalMain) {
+            canonicalIndexMap = board.computeCanonicalIndexMap();
+            territory = board.calculateTerritory(deadChains, canonicalIndexMap);
+        } else {
+            canonicalIndexMap = null;
+            territory = null;
+        }
+    }
+    renderPlayerCards();
+    if (p5Instance) p5Instance.redraw();
+}
+
 let isRebuilding = false;
 let rebuildPending = false;
 
@@ -382,7 +480,7 @@ function rebuildBoardToView() {
         }
 
         const replayMove = (move) => {
-            if (!move) return;
+            if (move === null || move === undefined) return;
             const playerNum = board.currentTurn?.player;
             if (reviewDisplayClocks && move[M_TIME_LEFT] !== undefined && playerNum > 0) {
                 reviewDisplayClocks[playerNum] = move[M_TIME_LEFT];
@@ -407,7 +505,7 @@ function rebuildBoardToView() {
 
         // Only show scoring overlay when on the final main-branch position
         const viewingFinalMain = isViewingFinalMainPosition();
-        if ((isScoring() || isFinished()) && viewingFinalMain) {
+        if ((isScoring() || isFinishedByScoring()) && viewingFinalMain) {
             canonicalIndexMap = board.computeCanonicalIndexMap();
             territory = board.calculateTerritory(deadChains, canonicalIndexMap);
         } else {
@@ -627,6 +725,26 @@ function goToLastMove() {
 // Single click fires once, hold fires once then delays, then repeats quickly
 let mouseHoldState = null;
 
+function stopMouseHold() {
+    if (mouseHoldState) {
+        if (mouseHoldState.timeoutId) clearTimeout(mouseHoldState.timeoutId);
+        if (mouseHoldState.intervalId) clearInterval(mouseHoldState.intervalId);
+        mouseHoldState = null;
+    }
+}
+
+function isPointerStillOnHoldTarget() {
+    if (!mouseHoldState?.selector || mouseHoldState.pointerX === undefined || mouseHoldState.pointerY === undefined) {
+        return true;
+    }
+    const el = document.elementFromPoint(mouseHoldState.pointerX, mouseHoldState.pointerY);
+    return !!el?.closest(mouseHoldState.selector);
+}
+
+document.addEventListener('mouseup', stopMouseHold);
+document.addEventListener('touchend', stopMouseHold);
+document.addEventListener('touchcancel', stopMouseHold);
+
 function setupHoldToRepeat(button, action) {
     const INITIAL_DELAY = 400; // ms before repeat starts
     const REPEAT_INTERVAL = 50; // ms between repeats
@@ -636,27 +754,29 @@ function setupHoldToRepeat(button, action) {
         
         // Clear any existing mouse hold state
         stopMouseHold();
+
+        const pointer = e.type === 'touchstart' ? e.touches?.[0] : e;
+        const selector = Array.from(button.classList)
+            .map(className => `.${className}`)
+            .join('');
         
         // Fire once immediately
         action();
         
         // Set up delayed repeat
         mouseHoldState = {
+            selector,
+            pointerX: pointer?.clientX,
+            pointerY: pointer?.clientY,
             timeoutId: setTimeout(() => {
                 // Start rapid repeat
-                if (mouseHoldState) {
+                if (mouseHoldState && isPointerStillOnHoldTarget()) {
                     mouseHoldState.intervalId = setInterval(action, REPEAT_INTERVAL);
+                } else {
+                    stopMouseHold();
                 }
             }, INITIAL_DELAY)
         };
-    }
-    
-    function stopMouseHold() {
-        if (mouseHoldState) {
-            if (mouseHoldState.timeoutId) clearTimeout(mouseHoldState.timeoutId);
-            if (mouseHoldState.intervalId) clearInterval(mouseHoldState.intervalId);
-            mouseHoldState = null;
-        }
     }
     
     // Mouse events
@@ -743,7 +863,7 @@ function addReviewMove(i) {
     }
     // Truncate any forward variation moves beyond current index
     reviewBranchMoves.splice(reviewVariationIndex);
-    reviewBranchMoves.push({ [M_INDEX]: i });
+    reviewBranchMoves.push(i);
     reviewVariationIndex++;
     pushOrDesync();
     rebuildBoardToView();
@@ -792,7 +912,7 @@ function undoToCurrentPosition() {
         const scratch = Board.fromSettings(gameSettings);
         for (let i = 0; i < viewIndex; i++) {
             const m = liveMoves[i];
-            if (!m) continue;
+            if (m === null || m === undefined) continue;
             const playerNum = scratch.currentTurn?.player;
             scratch.applyMoveRecord(m);
             if (m[M_TIME_LEFT] !== undefined && playerNum > 0) {
@@ -878,7 +998,7 @@ function exitScoring() {
     if (gameSettings?.timeSettings) {
         const rewindBoard = Board.fromSettings(gameSettings);
         for (let i = 0; i < passStartIndex; i++) {
-            if (liveMoves[i]) rewindBoard.applyMoveRecord(liveMoves[i]);
+            if (liveMoves[i] !== null && liveMoves[i] !== undefined) rewindBoard.applyMoveRecord(liveMoves[i]);
         }
         const playerNum = rewindBoard.currentTurn?.player;
         if (playerNum > 0 && gameSettings.timeSettings[playerNum]) {
@@ -923,7 +1043,7 @@ function checkAllAccepted() {
         const agreed = req[RQ_AGREES] || {};
         const allAccepted = requiredSeats.every(p => agreed[p] === true);
         if (allAccepted) {
-            gameRef.update({ [G_PHASE]: 'finished', [G_REQUEST]: null });
+            gameRef.update({ [G_PHASE]: 'finished', [G_REQUEST]: null, [G_FINISH_REASON]: 'scoring' });
         }
     });
 }
@@ -944,7 +1064,7 @@ function processRandomMoves() {
         nextBoard = board.tryPass();
     } else {
         const picked = candidates[Math.floor(Math.random() * candidates.length)];
-        moveRecord = { [M_INDEX]: picked.i };
+        moveRecord = picked.i;
         // No timeLeft for random player (player === 0)
     }
 
@@ -1003,8 +1123,7 @@ function isMyTurn() {
 
 function hasSoleWinner() {
     if (!board || !isPlaying()) return false;
-    const alive = requiredSeats.filter(p => !board.eliminatedPlayers.has(p));
-    return alive.length === 1;
+    return countAlivePlayers() === 1;
 }
 
 function canMakeMove() {
@@ -1029,12 +1148,12 @@ function addMove(i) {
     }
 
     const playerNum = board.currentTurn.player;
-    const moveRecord = { [M_INDEX]: i };
+    let moveRecord = i;
 
     // Add timeLeft if this player has time settings and is a human player
     if (playerNum > 0 && gameSettings.timeSettings?.[playerNum]) {
         const timeLeft = computeTimeLeft(playerNum);
-        if (timeLeft !== null) moveRecord[M_TIME_LEFT] = timeLeft;
+        if (timeLeft !== null) moveRecord = { [M_INDEX]: i, [M_TIME_LEFT]: timeLeft };
     }
 
     const updates = {};
@@ -1110,9 +1229,56 @@ function revealStone(i) {
     });
 }
 
+function getPausedClockValue(clockValue) {
+    if (clockValue === undefined || clockValue === null) return null;
+    if (clockValue >= 1e12) return Math.max(0, clockValue - serverNow());
+    return clockValue;
+}
+
+function buildEliminationClockUpdates(playerNum) {
+    if (!gameSettings?.timeSettings) return {};
+
+    const updates = {};
+    const eliminatedPlayers = new Set(board?.eliminatedPlayers || []);
+    eliminatedPlayers.add(playerNum);
+    const remainingPlayers = requiredSeats.filter(p => !eliminatedPlayers.has(p));
+
+    if (remainingPlayers.length <= 1) {
+        for (const p of requiredSeats) {
+            if (!gameSettings.timeSettings[p]) continue;
+            updates[`${G_CLOCKS}/${p}`] = getPausedClockValue(clocks[p]);
+        }
+        return updates;
+    }
+
+    if (gameSettings.timeSettings[playerNum]) {
+        updates[`${G_CLOCKS}/${playerNum}`] = getPausedClockValue(clocks[playerNum]);
+    }
+
+    return updates;
+}
+
+function buildEliminationStateUpdates(playerNum) {
+    const eliminatedPlayers = new Set(board?.eliminatedPlayers || []);
+    eliminatedPlayers.add(playerNum);
+    const remainingPlayers = requiredSeats.filter(p => !eliminatedPlayers.has(p));
+
+    if (remainingPlayers.length <= 1) {
+        return {
+            [G_PHASE]: 'finished',
+            [G_REQUEST]: null,
+            [G_FINISH_REASON]: 'elimination',
+        };
+    }
+
+    return {};
+}
+
 function addElimination(playerNum, reason) {
     const updates = {};
     updates[`${G_MOVES}/${liveMoves.length}`] = { [M_ELIMINATED]: playerNum, [M_ELIM_REASON]: reason };
+    Object.assign(updates, buildEliminationClockUpdates(playerNum));
+    Object.assign(updates, buildEliminationStateUpdates(playerNum));
     gameRef.update(updates, (error) => {
         if (error) console.error('Elimination update failed:', error);
         else setTimeout(processRandomMoves, 300);
@@ -1418,11 +1584,11 @@ function updatePlayerCard(playerNum, prefix, scores) {
             scoreDisplay.style.visibility = 'visible';
         } else {
             const viewingFinalPosition = viewIndex >= liveMoves.length;
-            const shouldShowScores = (isScoring() || isFinished()) && viewingFinalPosition;
+            const shouldShowScores = (isScoring() || isFinishedByScoring()) && viewingFinalPosition && !isEliminated;
             if (shouldShowScores) {
                 const score = scores[playerNum] || 0;
                 const scoreText = `Score: ${score}`;
-                if (isFinished()) {
+                if (isFinishedByScoring()) {
                     const isWinner = scores.maxScore > 0 && score === scores.maxScore;
                     scoreDisplay.innerHTML = isWinner ? `🏆 ${scoreText}` : scoreText;
                     scoreDisplay.className = 'player-score' + (isWinner ? ' winner' : '');
@@ -1443,7 +1609,13 @@ function updatePlayerCard(playerNum, prefix, scores) {
     const clockDisplay = document.getElementById(`${prefix}-clock-${playerNum}`);
     if (clockDisplay) {
         const ms = warningMs;
-        if (ms !== null && gameSettings?.timeSettings?.[playerNum]) {
+        const timeSetting = gameSettings?.timeSettings?.[playerNum];
+        const lobbyTimeSettingDisplay = isLobby() ? getLobbyTimeSettingDisplay(playerNum) : null;
+        if (lobbyTimeSettingDisplay) {
+            clockDisplay.textContent = lobbyTimeSettingDisplay;
+            clockDisplay.style.display = '';
+            clockDisplay.classList.add('clock-paused');
+        } else if (ms !== null && timeSetting) {
             clockDisplay.textContent = formatTime(ms, shouldWarnCard);
             clockDisplay.style.display = '';
             const isRunning = clocks[playerNum] >= 1e12;
@@ -1588,7 +1760,7 @@ async function renderPlayerCards() {
     }
 
     // Calculate scores if in scoring mode or finished
-    const scores = (isScoring() || isFinished()) ? calculateScores() : {};
+    const scores = (isScoring() || isFinishedByScoring()) ? calculateScores() : {};
 
     // Fetch display names for all seated players (non-blocking for UI)
     const namePromises = [];
@@ -1918,7 +2090,7 @@ function createSketch() {
             board = Board.fromSettings(gameSettings);
             board.calculateTransform(p.width, p.height);
 
-            if (isScoring() || isFinished()) {
+            if (isScoring() || isFinishedByScoring()) {
                 canonicalIndexMap = board.computeCanonicalIndexMap();
                 territory = board.calculateTerritory(deadChains, canonicalIndexMap);
             }
@@ -2095,15 +2267,33 @@ function getDisplayTime(playerNum) {
     return val;
 }
 
+function formatDurationUnit(ms) {
+    if (ms % 86400000 === 0) return `${ms / 86400000}d`;
+    if (ms % 3600000 === 0) return `${ms / 3600000}h`;
+    if (ms % 60000 === 0) return `${ms / 60000}m`;
+    return `${ms / 1000}s`;
+}
+
+function getLobbyTimeSettingDisplay(playerNum) {
+    const timeSetting = gameSettings?.timeSettings?.[playerNum];
+    if (!timeSetting) return null;
+    if (timeSetting.timeSettingString) return timeSetting.timeSettingString;
+    return `${formatDurationUnit(timeSetting.maintime || 0)} + ${formatDurationUnit(timeSetting.increment || 0)}`;
+}
+
 function formatTime(ms, showTenths = false) {
     if (ms <= 0) ms = 0;
     const totalSeconds = Math.floor(ms / 1000);
+    const totalDays = Math.floor(totalSeconds / 86400);
     const hours = Math.floor(totalSeconds / 3600);
     const mins = Math.floor((totalSeconds % 3600) / 60);
     const secs = totalSeconds % 60;
     const tenths = Math.floor((ms % 1000) / 100);
+    if (hours > 48) {
+        return `${totalDays} days`;
+    }
     if (hours > 0) {
-        return `${hours}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+        return `${hours}h ${mins}m`;
     }
     if (showTenths) {
         return `${mins}:${String(secs).padStart(2, '0')}.${tenths}`;

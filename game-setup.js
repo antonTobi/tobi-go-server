@@ -42,13 +42,6 @@ let setupPageInitialized = false;
 async function initSetupPageWhenReady() {
     if (setupPageInitialized) return;
     setupPageInitialized = true;
-
-    try {
-        await waitForAuthReady();
-    } catch (error) {
-        console.error('Auth initialization failed before loading setup page:', error);
-    }
-
     initSetupPage();
 }
 
@@ -842,12 +835,32 @@ function validateBoardSize() {
     }
 }
 
-function handleCreateGame(event) {
+function formatTimeControlValue(value, unitMs) {
+    const rounded = Number.isInteger(value) ? value.toString() : value.toString();
+    const unitLabel = unitMs === 86400000 ? 'd'
+        : unitMs === 3600000 ? 'h'
+        : unitMs === 60000 ? 'm'
+        : 's';
+    return `${rounded}${unitLabel}`;
+}
+
+function buildTimeSettingString(mainValue, mainUnitMs, incrementValue, incrementUnitMs) {
+    return `${formatTimeControlValue(mainValue, mainUnitMs)} + ${formatTimeControlValue(incrementValue, incrementUnitMs)}`;
+}
+
+async function handleCreateGame(event) {
     event.preventDefault();
 
     if (!currentUser) {
-        alert('Please wait for authentication...');
-        return;
+        try {
+            await waitForAuthReady();
+        } catch (error) {
+            console.error('Auth initialization failed before creating game:', error);
+        }
+        if (!currentUser) {
+            alert('Please wait for authentication...');
+            return;
+        }
     }
 
     if (!validateBoardSize()) return;
@@ -857,6 +870,7 @@ function handleCreateGame(event) {
     const powers = {};
     const komi = {};
     const timeSettings = {};
+    const clockSettings = [];
     const legalityChecks = [];
 
     for (const entry of variantEntries) {
@@ -884,17 +898,24 @@ function handleCreateGame(event) {
             }
             case 'clock': {
                 const target = document.getElementById(entry.playerSelectId).value;
+                const mainValue = parseFloat(document.getElementById(entry.mainValId).value) || 0;
+                const mainUnitMs = parseInt(document.getElementById(entry.mainUnitId).value, 10) || 60000;
+                const incrementValue = parseFloat(document.getElementById(entry.incValId).value) || 0;
+                const incrementUnitMs = parseInt(document.getElementById(entry.incUnitId).value, 10) || 1000;
                 const maintime = Math.round(
-                    (parseFloat(document.getElementById(entry.mainValId).value) || 0) *
-                    (parseInt(document.getElementById(entry.mainUnitId).value, 10) || 60000)
+                    mainValue * mainUnitMs
                 );
                 const increment = Math.round(
-                    (parseFloat(document.getElementById(entry.incValId).value) || 0) *
-                    (parseInt(document.getElementById(entry.incUnitId).value, 10) || 1000)
+                    incrementValue * incrementUnitMs
                 );
                 if (maintime > 0 || increment > 0) {
-                    const players = target === 'all' ? [1, 2, 3, 4, 5] : [parseInt(target, 10)];
-                    for (const p of players) timeSettings[p] = { maintime, increment };
+                    const timeSettingString = buildTimeSettingString(mainValue, mainUnitMs, incrementValue, incrementUnitMs);
+                    clockSettings.push({
+                        target,
+                        maintime,
+                        increment,
+                        timeSettingString,
+                    });
                 }
                 break;
             }
@@ -940,6 +961,17 @@ function handleCreateGame(event) {
     addFromSeq(mainSequence);
     for (const st of setupTurns) addFromSeq(st.sequence);
     for (const p of Object.keys(powers)) { const n = parseInt(p); if (n >= 1 && n <= 5) playerNums.add(n); }
+    const activePlayers = playerNums.size > 0 ? Array.from(playerNums).sort((a, b) => a - b) : [1, 2];
+    for (const clockSetting of clockSettings) {
+        const players = clockSetting.target === 'all' ? activePlayers : [parseInt(clockSetting.target, 10)];
+        for (const p of players) {
+            timeSettings[p] = {
+                maintime: clockSetting.maintime,
+                increment: clockSetting.increment,
+                timeSettingString: clockSetting.timeSettingString,
+            };
+        }
+    }
     const numPlayers = playerNums.size > 0 ? Math.max(...playerNums) : 2;
     const effectivePlayers = Math.max(2, numPlayers);
 

@@ -10,9 +10,9 @@ const GS_SETUP_TURNS = "st", GS_MAIN_SEQ = "ms", GS_POWERS = "pw", GS_KOMI = "k"
 // setupTurns / powers entry
 const ST_SEQUENCE = "q", ST_REPEAT = "r", PW_USES = "u";
 // timeSetting
-const TS_MAINTIME = "m", TS_INCREMENT = "i", TS_CAP = "c";
+const TS_MAINTIME = "m", TS_INCREMENT = "i", TS_CAP = "c", TS_DISPLAY = "d";
 // game state
-const G_CLOCKS = "cl", G_MOVES = "mv", G_REQUEST = "rq", G_PHASE = "ph", G_DEAD_CHAINS = "dc", G_REVIEW = "rv";
+const G_CLOCKS = "cl", G_MOVES = "mv", G_REQUEST = "rq", G_PHASE = "ph", G_DEAD_CHAINS = "dc", G_REVIEW = "rv", G_FINISH_REASON = "fr";
 // request
 const RQ_TYPE = "t", RQ_MOVE_NUMBER = "n", RQ_AGREES = "a";
 
@@ -294,7 +294,7 @@ class Board {
         this.currentTurn = null      // The Turn to be made next
         this.powers = {}             // Per-player: { [playerNum]: [{sequence:[Turn], usesLeft:N}] }
         this.komi = {}               // Per-player: { [playerNum]: value }
-        this.timeSettings = null     // Per-player: { [playerNum]: {maintime, increment, cap} } or null
+        this.timeSettings = null     // Per-player: { [playerNum]: {maintime, increment, cap, timeSettingString} } or null
         this.numPlayers = 2
         this.visitedStates = new Set() // Serialized board states for superko checking
         this.moveHistory = []          // [{i}] entries for last-move marker display
@@ -525,9 +525,10 @@ class Board {
     }
 
     // Apply a compressed move record in-place (used for history replay — trusts the record).
-    // move is one of: {i,c[,l]} | {s:1} | {w:N} | {r:N}
+    // move is one of: N | {i:N,l:N} | {s:1} | {w:N} | {r:N}
     applyMoveRecord(move) {
         const isMainTurn = this.currentSequence === null;
+        const moveIndex = typeof move === 'number' ? move : move?.[M_INDEX];
 
         if (move[M_PASS]) {
             if (isMainTurn) this.consecutiveMainPasses++;
@@ -565,8 +566,8 @@ class Board {
             return;
         }
 
-        // Normal place: {i}
-        const node = this.nodes[move[M_INDEX]];
+        // Normal place: N or {i:N[,l:N]}
+        const node = this.nodes[moveIndex];
         if (node) {
             if (isMainTurn) this.resetConsecutiveMainPasses();
             const color = this.currentTurn.color;
@@ -607,7 +608,7 @@ class Board {
             }
 
             this.visitedStates.add(this.nodes.map(n => n.color).join(''));
-            this.moveHistory.push({ i: move[M_INDEX] });
+            this.moveHistory.push({ i: moveIndex });
         }
 
         this.advanceMoveOrder();
@@ -1011,15 +1012,23 @@ class Board {
                     && lastNode?.onlyVisibleTo !== null
                     && lastNode?.onlyVisibleTo !== undefined
                     && lastNode?.onlyVisibleTo !== viewerPlayer;
-                if (lastNode && lastColor > 0 && !hiddenFromViewer) {
-                    const markerSize = this.scale * 0.5;
-                    p.noFill()
-                    p.stroke(...markerColors[lastColor]);
-                    p.circle(
-                        alignPoint(lastNode.x * this.scale),
-                        alignPoint(lastNode.y * this.scale),
-                        markerSize
-                    );
+                if (lastNode && !hiddenFromViewer) {
+                    const cx = alignPoint(lastNode.x * this.scale, this.sw);
+                    const cy = alignPoint(lastNode.y * this.scale, this.sw);
+                    if (lastColor > 0) {
+                        const markerSize = this.scale * 0.5;
+                        p.noFill();
+                        p.stroke(...markerColors[lastColor]);
+                        p.circle(cx, cy, markerSize);
+                    } else if (lastColor === 0 || lastColor === -1) {
+                        const xr = (this.scale - this.sw) * 0.12;
+                        const underColor = lastColor === -1 ? 0 : (lastNode.color > 0 ? lastNode.color : 0);
+                        const mc = markerColors[underColor] || markerColors[0];
+                        p.stroke(...mc, 200);
+                        p.strokeWeight(3);
+                        p.line(cx - xr, cy - xr, cx + xr, cy + xr);
+                        p.line(cx - xr, cy + xr, cx + xr, cy - xr);
+                    }
                 }
             }
         }
@@ -1295,6 +1304,7 @@ function compressGameSetting(gs) {
                 [TS_MAINTIME]: ts.maintime,
                 [TS_INCREMENT]: ts.increment,
             };
+            if (ts.timeSettingString) c[GS_TIME_SETTINGS][playerNum][TS_DISPLAY] = ts.timeSettingString;
         }
     }
     if (gs.legalityChecks?.length) {
@@ -1338,6 +1348,7 @@ function decompressGameSetting(data) {
             gs.timeSettings[parseInt(playerNum)] = {
                 maintime: ts[TS_MAINTIME],
                 increment: ts[TS_INCREMENT],
+                timeSettingString: ts[TS_DISPLAY],
             };
         }
     }
@@ -1356,6 +1367,7 @@ function compressMoveRecord(move) {
     if (move.pass) return { [M_PASS]: 1 };
     if (move.power !== undefined) return { [M_POWER]: move.power };
     if (move.revealed !== undefined) return { [M_REVEALED]: move.revealed };
+    if (move.timeLeft === undefined) return move.index;
     const cm = { [M_INDEX]: move.index };
     if (move.timeLeft !== undefined) cm[M_TIME_LEFT] = move.timeLeft;
     return cm;
@@ -1363,6 +1375,7 @@ function compressMoveRecord(move) {
 
 // Decompress a Firebase move record to a JS move object.
 function decompressMoveRecord(cm) {
+    if (typeof cm === 'number') return { index: cm };
     if (cm[M_PASS]) return { pass: 1 };
     if (cm[M_POWER] !== undefined) return { power: cm[M_POWER] };
     if (cm[M_REVEALED] !== undefined) return { revealed: cm[M_REVEALED] };

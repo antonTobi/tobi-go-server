@@ -1,12 +1,12 @@
 // Home page script
 let gamesRef = null;
+let savedDisplayName = '';
 
 // Initialize page immediately
 initHomePage();
 
 // Update auth status when ready
 async function updateAuthStatus(user) {
-    const authStatus = document.getElementById('auth-status');
     const accountSection = document.getElementById('account-section');
     const accountTypeLabel = document.getElementById('account-type-label');
     const toggleAuthBtn = document.getElementById('toggleAuthBtn');
@@ -15,8 +15,7 @@ async function updateAuthStatus(user) {
     const authForms = document.getElementById('auth-forms');
     
     if (user) {
-        authStatus.textContent = `Signed in`;
-        authStatus.classList.add('auth-ready');
+        updateProfileTriggerLabel();
         
         // Load and display current display name
         await loadDisplayName();
@@ -35,8 +34,7 @@ async function updateAuthStatus(user) {
             signedInEmail.textContent = user.email || 'Google Account';
         }
     } else {
-        authStatus.textContent = 'Connecting...';
-        authStatus.classList.remove('auth-ready');
+        updateProfileTriggerLabel();
     }
 }
 
@@ -44,9 +42,11 @@ async function loadDisplayName() {
     const displayNameInput = document.getElementById('displayNameInput');
     try {
         const name = await getMyDisplayName();
-        if (name) {
-            displayNameInput.value = name;
-        }
+        const nextName = (name || '').trim();
+        savedDisplayName = nextName;
+        displayNameInput.value = nextName;
+        updateProfileTriggerLabel(nextName);
+        updateSaveButtonState();
     } catch (error) {
         console.error('Error loading display name:', error);
     }
@@ -74,26 +74,84 @@ window.addEventListener('authError', (e) => {
 // Also listen to onAuthStateChanged as fallback
 auth.onAuthStateChanged((user) => {
     updateAuthStatus(user);
+    if (user) startGamesListener();
 });
 
 function initHomePage() {
     // Setup create game button
     document.getElementById('createGameBtn').addEventListener('click', createGame);
+
+    // Setup profile modal
+    setupProfileModal();
     
     // Setup display name save button
     document.getElementById('saveNameBtn').addEventListener('click', saveDisplayName);
     document.getElementById('displayNameInput').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') saveDisplayName();
     });
+    document.getElementById('displayNameInput').addEventListener('input', updateSaveButtonState);
     
     // Setup auth UI
     setupAuthUI();
+
+    updateProfileTriggerLabel();
+}
+
+function setupProfileModal() {
+    const profileTrigger = document.getElementById('profileTrigger');
+    const profileModal = document.getElementById('profileModal');
+    const closeProfileModalBtn = document.getElementById('closeProfileModalBtn');
+
+    profileTrigger.addEventListener('click', openProfileModal);
+    closeProfileModalBtn.addEventListener('click', closeProfileModal);
+
+    profileModal.addEventListener('click', (event) => {
+        if (event.target === profileModal) {
+            closeProfileModal();
+        }
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && !profileModal.classList.contains('hidden')) {
+            closeProfileModal();
+        }
+    });
+}
+
+function openProfileModal() {
+    const profileModal = document.getElementById('profileModal');
+    profileModal.classList.remove('hidden');
+    document.body.classList.add('modal-open');
+}
+
+function closeProfileModal() {
+    const profileModal = document.getElementById('profileModal');
+    profileModal.classList.add('hidden');
+    document.body.classList.remove('modal-open');
+}
+
+function updateProfileTriggerLabel(explicitName) {
+    const profileTriggerName = document.getElementById('profileTriggerName');
+    const nextName = typeof explicitName === 'string' ? explicitName.trim() : savedDisplayName;
+    profileTriggerName.textContent = nextName || 'Profile';
+}
+
+function updateSaveButtonState() {
+    const input = document.getElementById('displayNameInput');
+    const saveBtn = document.getElementById('saveNameBtn');
+    const draftName = input.value.trim();
+    saveBtn.disabled = draftName === savedDisplayName;
 }
 
 function startGamesListener() {
     if (gamesRef) return; // already attached
+    console.log('Starting games listener');
     gamesRef = db.ref('games').orderByChild('createdAt').limitToLast(12);
     gamesRef.on('value', (snapshot) => {
+        console.log('Games listener snapshot received:', {
+            exists: snapshot.exists(),
+            count: snapshot.exists() ? Object.keys(snapshot.val() || {}).length : 0,
+        });
         const games = snapshot.val();
         if (!games) {
             displayGames(null);
@@ -103,6 +161,8 @@ function startGamesListener() {
         const sorted = Object.entries(games)
             .sort((a, b) => (b[1].createdAt || 0) - (a[1].createdAt || 0));
         displayGames(Object.fromEntries(sorted));
+    }, (error) => {
+        console.error('Games listener failed:', error);
     });
 }
 
@@ -115,6 +175,14 @@ async function saveDisplayName() {
     if (!name) {
         status.textContent = 'Name cannot be empty';
         status.className = 'display-name-status error';
+        updateSaveButtonState();
+        return;
+    }
+
+    if (name === savedDisplayName) {
+        status.textContent = '';
+        status.className = 'display-name-status';
+        updateSaveButtonState();
         return;
     }
     
@@ -124,6 +192,9 @@ async function saveDisplayName() {
     
     try {
         await setDisplayName(name);
+        savedDisplayName = name;
+        input.value = name;
+        updateProfileTriggerLabel(name);
         status.textContent = 'Saved!';
         status.className = 'display-name-status success';
         setTimeout(() => {
@@ -133,7 +204,7 @@ async function saveDisplayName() {
         status.textContent = error.message;
         status.className = 'display-name-status error';
     } finally {
-        saveBtn.disabled = false;
+        updateSaveButtonState();
     }
 }
 
@@ -388,10 +459,21 @@ function createThumbnail(container, game) {
         let deadChains = null;
         let canonicalIndexMap = null;
         let territory = null;
+        const resizeThumbnail = () => {
+            const host = p._userNode;
+            const size = Math.min(host.clientWidth, host.clientHeight) || 200;
+            if (p.width !== size || p.height !== size) {
+                p.resizeCanvas(size, size);
+            }
+            if (board) {
+                board.calculateTransform(size, size);
+                p.redraw();
+            }
+        };
 
         p.setup = () => {
-            const container = p._userNode;
-            const size = Math.min(container.clientWidth, container.clientHeight) || 200;
+            const host = p._userNode;
+            const size = Math.min(host.clientWidth, host.clientHeight) || 200;
             p.createCanvas(size, size);
             p.noLoop();
 
@@ -405,7 +487,7 @@ function createThumbnail(container, game) {
                 if (moves) {
                     const indices = Object.keys(moves).map(Number).sort((a, b) => a - b);
                     for (const idx of indices) {
-                        if (moves[idx]) board.applyMoveRecord(moves[idx]);
+                        if (moves[idx] !== null && moves[idx] !== undefined) board.applyMoveRecord(moves[idx]);
                     }
                 }
 
@@ -420,6 +502,10 @@ function createThumbnail(container, game) {
                 board.calculateTransform(p.width, p.height);
                 p.redraw();
             }
+        };
+
+        p.windowResized = () => {
+            resizeThumbnail();
         };
 
         p.draw = () => {
